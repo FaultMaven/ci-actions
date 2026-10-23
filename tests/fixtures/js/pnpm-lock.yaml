@@ -6,4 +6,8 @@ settings:
 
 importers:
 
-  .: {}
+  .:
+    dependencies:
+      setup-js-fixture-dep:
+        specifier: link:tests/fixtures/js/dep
+        version: link:tests/fixtures/js/dep

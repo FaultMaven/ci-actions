@@ -4,5 +4,8 @@
   "packageManager": "pnpm@9.15.9",
   "engines": {
     "node": "24.x"
+  },
+  "dependencies": {
+    "setup-js-fixture-dep": "link:tests/fixtures/js/dep"
   }
 }

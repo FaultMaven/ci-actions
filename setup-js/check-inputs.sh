@@ -1,11 +1,12 @@
 #!/bin/bash
 # Refuses an input setup-js cannot honour, before anything is set up.
 # Environment, bound by action.yml: WANT_PNPM, WANT_INSTALL.
-for name in WANT_PNPM WANT_INSTALL; do
-  case "${!name:-}" in
+for input in pnpm install; do
+  var="WANT_${input^^}"
+  case "${!var:-}" in
     true | false) ;;
     *)
-      echo "::error::setup-js: ${name#WANT_} must be 'true' or 'false'"
+      echo "::error::setup-js: ${input} must be 'true' or 'false', not '${!var:-}'"
       exit 1
       ;;
   esac

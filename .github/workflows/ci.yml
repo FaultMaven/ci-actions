@@ -50,7 +50,9 @@ jobs:
         run: tests/test-lint-workflows.sh
 
   # setup-js for real: a fixture package.json declares Node 24 and pnpm 9.15.9,
-  # and each mode must set up exactly those, and install only when asked.
+  # and each mode must set up exactly those, and install only when asked. The
+  # fixture's one dependency is a link: to a local directory, so an install
+  # writes node_modules without reaching the registry.
   setup-js:
     name: setup-js (${{ matrix.mode }})
     runs-on: ubuntu-24.04
@@ -91,7 +93,7 @@ jobs:
             [ "$(pnpm --version)" = 9.15.9 ] || { echo "::error::pnpm is $(pnpm --version), not 9.15.9"; exit 1; }
           fi
           if [ "$WANT_INSTALL" = true ]; then
-            [ -f node_modules/.modules.yaml ] || { echo "::error::no install ran"; exit 1; }
+            [ -f node_modules/.modules.yaml ] && [ -L node_modules/setup-js-fixture-dep ] || { echo "::error::no install ran"; exit 1; }
           else
             [ ! -e node_modules ] || { echo "::error::an install ran with install: false"; exit 1; }
           fi

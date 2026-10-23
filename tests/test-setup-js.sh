@@ -31,8 +31,8 @@ check true true 0 ""
 check true false 0 ""
 check false false 0 ""
 check false true 1 "::error::setup-js: install: true needs pnpm: true"
-check yes true 1 "::error::setup-js: PNPM must be 'true' or 'false'"
-check true "" 1 "::error::setup-js: INSTALL must be 'true' or 'false'"
+check yes true 1 "::error::setup-js: pnpm must be 'true' or 'false', not 'yes'"
+check true "" 1 "::error::setup-js: install must be 'true' or 'false', not ''"
 
 echo "== action.yml"
 step() { yq ".runs.steps[] | select(.name == \"$1\") | $2" "$ACTION"; }

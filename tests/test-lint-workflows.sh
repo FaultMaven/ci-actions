@@ -1,9 +1,12 @@
 #!/bin/bash
-# lint-workflows: a download that fails its checksum never runs, and
-# action.yml's wiring. The real run (actionlint over this repository's
-# workflows) is CI's own Lint job, which calls ./lint-workflows.
+# lint-workflows: a download that fails its checksum never runs; a verified
+# one runs once for its version and once over the workflows, with shellcheck at
+# -S warning, and its exit status is the step's. Plus action.yml's wiring. The
+# real run (actionlint over this repository's workflows) is CI's own Lint job,
+# which calls ./lint-workflows.
 #
-# SAFETY: `curl` and `tar` are stubs; nothing is downloaded.
+# SAFETY: `curl` is a stub and `tar` a logging pass-through; nothing is
+# downloaded, and the only actionlint that runs is this file's stand-in.
 #
 # Run: tests/test-lint-workflows.sh
 set -uo pipefail
@@ -23,29 +26,67 @@ expect() { # label, condition-text (evaluated), detail
 }
 command -v yq >/dev/null 2>&1 || { echo "yq (mikefarah v4) is required"; exit 1; }
 
-BIN="$WORK/bin"; mkdir -p "$BIN"
-# curl writes a tarball that is not actionlint's; tar logs that it ran.
+REAL_TAR="$(command -v tar)"
+mkdir -p "$WORK/bin" "$WORK/fake" "$WORK/repo"
+BIN="$WORK/bin"
+# The stand-in actionlint logs where it ran, its arguments and SHELLCHECK_OPTS,
+# answers -version, and otherwise exits FAKE_RC (1: it found problems).
+cat > "$WORK/fake/actionlint" <<'FAKE'
+#!/bin/bash
+printf '%s|%s|%s\n' "$PWD" "$*" "${SHELLCHECK_OPTS-unset}" >> "$WORK/actionlint.log"
+[ "$*" = -version ] && { echo 1.7.7; exit 0; }
+exit "${FAKE_RC:-1}"
+FAKE
+chmod +x "$WORK/fake/actionlint"
+"$REAL_TAR" -czf "$WORK/fake.tar.gz" -C "$WORK/fake" actionlint
+FAKE_SHA256="$(sha256sum "$WORK/fake.tar.gz" | cut -d' ' -f1)"
+# curl writes FAKE_TGZ, or, without one, a file that is not actionlint; tar
+# logs that it ran, then extracts for real.
 cat > "$BIN/curl" <<'CURL'
 #!/bin/bash
 printf '%s\n' "$*" >> "$WORK/curl.log"
-while [ $# -gt 0 ]; do [ "$1" = -o ] && { printf 'not actionlint\n' > "$2"; }; shift; done
+while [ $# -gt 0 ]; do
+    if [ "$1" = -o ]; then
+        if [ -n "${FAKE_TGZ:-}" ]; then cp "$FAKE_TGZ" "$2"; else printf 'not actionlint\n' > "$2"; fi
+    fi
+    shift
+done
 CURL
-cat > "$BIN/tar" <<'TAR'
+cat > "$BIN/tar" <<TAR
 #!/bin/bash
-printf '%s\n' "$*" >> "$WORK/tar.log"
+printf '%s\n' "\$*" >> "\$WORK/tar.log"
+exec "$REAL_TAR" "\$@"
 TAR
 chmod +x "$BIN/curl" "$BIN/tar"
 for c in curl tar; do
     [ "$(PATH="$BIN:$PATH" command -v "$c")" = "$BIN/$c" ] || { echo "REFUSING TO RUN: $c is not the stub"; exit 1; }
 done
 
+lint() { # ACTIONLINT_SHA256, then extra environment assignments
+    local sha="$1"; shift
+    : > "$WORK/curl.log"; : > "$WORK/tar.log"; : > "$WORK/actionlint.log"
+    OUT="$(cd "$WORK/repo" && env PATH="$BIN:$PATH" WORK="$WORK" RUNNER_TEMP="$WORK" ACTIONLINT_VERSION=1.7.7 \
+        ACTIONLINT_SHA256="$sha" SHELLCHECK_OPTS='-S warning' "$@" \
+        bash --noprofile --norc -eo pipefail "$SCRIPT" 2>&1)"; RC=$?
+}
+# shellcheck disable=SC2034  # read inside expect's eval
+URL="https://github.com/rhysd/actionlint/releases/download/v1.7.7/actionlint_1.7.7_linux_amd64.tar.gz"
+# shellcheck disable=SC2034  # read inside expect's eval
+WANT_RUNS="$WORK/repo|-version|-S warning
+$WORK/repo|-color|-S warning"
+
 echo "== a download that fails its checksum"
-: > "$WORK/curl.log"; : > "$WORK/tar.log"
-OUT="$(cd "$WORK" && env PATH="$BIN:$PATH" WORK="$WORK" RUNNER_TEMP="$WORK" ACTIONLINT_VERSION=1.7.7 \
-    ACTIONLINT_SHA256="$(yq '.runs.steps[0].env.ACTIONLINT_SHA256' "$ACTION")" SHELLCHECK_OPTS='-S warning' \
-    bash --noprofile --norc -eo pipefail "$SCRIPT" 2>&1)"; RC=$?
+lint "$(yq '.runs.steps[0].env.ACTIONLINT_SHA256' "$ACTION")"
 expect "it fails, after one download of the pinned release, and never extracts or runs it" \
-    '[[ "$RC" -ne 0 && "$(grep -c . "$WORK/curl.log")" == 1 && ! -s "$WORK/tar.log" ]] && grep -qF "https://github.com/rhysd/actionlint/releases/download/v1.7.7/actionlint_1.7.7_linux_amd64.tar.gz" "$WORK/curl.log" && grep -q "FAILED" <<< "$OUT"' "rc=$RC out=$OUT tar=$(cat "$WORK/tar.log")"
+    '[[ "$RC" -ne 0 && "$(cat "$WORK/curl.log")" == *"$URL"* && "$(grep -c . "$WORK/curl.log")" == 1 && ! -s "$WORK/tar.log" && ! -s "$WORK/actionlint.log" ]] && grep -q "FAILED" <<< "$OUT"' "rc=$RC out=$OUT tar=$(cat "$WORK/tar.log")"
+
+echo "== a verified download"
+lint "$FAKE_SHA256" FAKE_TGZ="$WORK/fake.tar.gz" FAKE_RC=1
+expect "actionlint's findings fail the step, after one -version and one -color run over the repository, both with -S warning" \
+    '[[ "$RC" -ne 0 && "$(cat "$WORK/actionlint.log")" == "$WANT_RUNS" && "$(grep -c . "$WORK/tar.log")" == 1 ]]' "rc=$RC out=$OUT runs=$(cat "$WORK/actionlint.log")"
+lint "$FAKE_SHA256" FAKE_TGZ="$WORK/fake.tar.gz" FAKE_RC=0
+expect "a clean actionlint passes the step, after the same two runs" \
+    '[[ "$RC" -eq 0 && "$(cat "$WORK/actionlint.log")" == "$WANT_RUNS" ]]' "rc=$RC out=$OUT runs=$(cat "$WORK/actionlint.log")"
 
 echo "== action.yml"
 # shellcheck disable=SC2016,SC2034  # the literal command line; read inside expect's eval
