@@ -13,13 +13,13 @@
 #   | 3 | queued Y                                      | X   | rc 0, ::notice::, unchanged             |
 #   | 4 | queued Y                                      | Y   | rc 0, unchanged, no compare             |
 #   | 5 | queued Z                                      | Y   | rc 1, ::error:: naming both, unchanged  |
-#   | 6 | queued unknown sha                            | Y   | rc 1 after 3 attempts, Not Found        |
+#   | 6 | queued unknown sha                            | Y   | rc 1 at once, Not Found named           |
 #   | 7 | clone at the seed, then Y lands               | X   | rejected -> recompute -> skip           |
 #   | 8 | clone at the seed, then X lands               | Y   | rejected -> recompute -> write (ff)     |
 #   | 9 | clone at the seed, then svc-b's file lands    | Y   | rejected -> recompute -> write, both ok |
 #   |10 | every row                                     |     | the remote's main is unchanged          |
 # then the entries the rule refuses (r1-r6), races and odd entries (101-111),
-# failure messages (F6, F7, F9), the inputs action.yml passes (v1-v6), and
+# failure messages (F6, F7, F9-F11), the inputs action.yml passes (v1-v6), and
 # action.yml's own wiring: the checkout, the working directory, the command
 # line and the env names this harness binds.
 # Every refusal of the queue's state ends "GHCR holds <tag> but the queue does
@@ -35,7 +35,8 @@
 # SAFETY: nothing here reaches GitHub. `gh` is a stub that answers
 # `gh api repos/<repo>/compare/A...B?per_page=1 --jq .status` from the local service
 # repo with `git merge-base --is-ancestor` both ways (an unknown sha gives the
-# 404 shape: the JSON body on stdout, the message on stderr, rc 1); `sleep`
+# 404 shape: the JSON body on stdout, the message on stderr, rc 1; GH_DENY
+# gives GitHub's 403 for a token without `contents: read`, or a rate limit's); `sleep`
 # and `date` are stubs; every git remote is a local path, and git reads no
 # user or system config. The run refuses to start unless `command -v`
 # resolves gh, sleep and date to the stubs.
@@ -90,6 +91,16 @@ range="${2#"repos/$WANT_REPO/compare/"}"; range="${range%"?per_page=1"}"
 base="${range%%...*}"; head="${range#*...}"
 b="$(git -C "$SVC" rev-parse -q --verify "${base}^{commit}" 2>/dev/null)" || b=""
 h="$(git -C "$SVC" rev-parse -q --verify "${head}^{commit}" 2>/dev/null)" || h=""
+case "${GH_DENY:-}" in
+    permission)
+        printf '%s' '{"message":"Resource not accessible by integration","documentation_url":"https://docs.github.com/rest/commits/commits#compare-two-commits","status":"403"}'
+        echo "gh: Resource not accessible by integration (HTTP 403)" >&2
+        exit 1 ;;
+    ratelimit)
+        printf '%s' '{"message":"You have exceeded a secondary rate limit. Please wait a few minutes before you try again.","status":"403"}'
+        echo "gh: You have exceeded a secondary rate limit. Please wait a few minutes before you try again. (HTTP 403)" >&2
+        exit 1 ;;
+esac
 if [ -n "${GH_TRANSPORT_FAIL:-}" ]; then
     printf '%s\n' "error connecting to api.github.com" "check your internet connection or https://githubstatus.com" >&2
     exit 1
@@ -239,10 +250,10 @@ mkrow 5 "$Z" none; runrow "$Y"; common "row 5" 1
 expect "row 5: ::error:: naming both commits and the file; image-queue unchanged" \
     'grep -qxF "::error::neither commit contains the other: available-images/staging/svc-a.yaml names $Z and this run is $Y. The queue is left as it is. $GHCR_Y" <<< "$OUT" && [[ "$TIP" == "$SB_REMOTE_TIP" && "$A_COMMIT" == "$Z" ]]' "$(ctx)"
 
-echo "== 6. queued an unknown sha, run Y: retried, never written"
+echo "== 6. queued an unknown sha, run Y: refused at once, never written"
 mkrow 6 "$UNKNOWN" none; runrow "$Y"; common "row 6" 1
-expect "row 6: three compares, a sleep after attempts 1 and 2 only (2s, 4s), then ::error:: after 3 attempts carrying gh's first line, Not Found; image-queue unchanged" \
-    '[[ "$(grep -c . <<< "$CALLS")" == 3 && "$SLEEPS" == 2 && "$SLEEP_ARGS" == "2 4 " && "$TIP" == "$SB_REMOTE_TIP" && "$A_COMMIT" == "$UNKNOWN" ]] && grep -qxF "::error::could not update the queue after 3 attempts: the compare $UNKNOWN...$Y failed: Not Found (HTTP 404). $GHCR_Y" <<< "$OUT" && [[ "$OUT" != *"documentation_url"* ]]' "$(ctx)"
+expect "row 6: one compare, no sleep, then ::error:: naming the 404 and both causes, with the entry; image-queue unchanged" \
+    '[[ "$(grep -c . <<< "$CALLS")" == 1 && "$SLEEPS" == 0 && "$TIP" == "$SB_REMOTE_TIP" && "$A_COMMIT" == "$UNKNOWN" ]] && grep -qxF "::error::the compare $UNKNOWN...$Y answered '"'"'Not Found (HTTP 404)'"'"': one of them is not a commit of FaultMaven/svc-a (a rewritten history?), or github-token cannot see FaultMaven/svc-a: available-images/staging/svc-a.yaml has tag '"'"'sha-${UNKNOWN:0:7}'"'"' and commit_sha '"'"'$UNKNOWN'"'"'. The queue is left as it is. $GHCR_Y" <<< "$OUT" && [[ "$OUT" != *"documentation_url"* && "$OUT" != *"after 3 attempts"* ]]' "$(ctx)"
 
 echo "== 7. clone at the seed, Y lands, run X: rejected, recomputed, skipped"
 mkrow 7 "" "$Y"; runrow "$X"; common "row 7" 0
@@ -390,6 +401,16 @@ rejected() { # label, want error line
     expect "$1: refused with exactly '$2' before any read; no compare; image-queue unchanged" \
         '[[ "$OUT" == "$WANT_ERR" && -z "$CALLS" && "$TIP" == "$SB_REMOTE_TIP" ]]' "$(ctx)"
 }
+
+echo "== F10. a token without contents: read: GitHub's 403, refused at once"
+mkrow f10 "$X" none; export GH_DENY=permission; runrow "$Y"; unset GH_DENY; common "F10" 1
+expect "F10: one compare, no sleep, then ::error:: naming the token, gh's first line and permissions: contents: read; image-queue unchanged" \
+    '[[ "$(grep -c . <<< "$CALLS")" == 1 && "$SLEEPS" == 0 && "$TIP" == "$SB_REMOTE_TIP" ]] && grep -qxF "::error::github-token cannot read FaultMaven/svc-a'"'"'s commits (the compare $X...$Y answered '"'"'Resource not accessible by integration (HTTP 403)'"'"'): the calling job needs permissions: contents: read. The queue is left as it is. $GHCR_Y" <<< "$OUT" && [[ "$OUT" != *"documentation_url"* ]]' "$(ctx)"
+
+echo "== F11. a 403 rate limit is transient: retried like any other failure"
+mkrow f11 "$X" none; export GH_DENY=ratelimit; runrow "$Y"; unset GH_DENY; common "F11" 1
+expect "F11: three compares, sleeps 2s and 4s, then ::error:: after 3 attempts with the rate limit's line; image-queue unchanged" \
+    '[[ "$(grep -c . <<< "$CALLS")" == 3 && "$SLEEPS" == 2 && "$SLEEP_ARGS" == "2 4 " && "$TIP" == "$SB_REMOTE_TIP" ]] && grep -qxF "::error::could not update the queue after 3 attempts: the compare $X...$Y failed: You have exceeded a secondary rate limit. Please wait a few minutes before you try again. (HTTP 403). $GHCR_Y" <<< "$OUT"' "$(ctx)"
 echo "== v1. a service name that is not a queue file name: refused"
 mkrow v1 "" none; runrow "$Y" SERVICE_NAME="../svc-a"; common "v1" 1
 rejected "v1" "::error::the service input is not a queue file name (a-z, 0-9 and -, at most 63 characters)"
