@@ -19,7 +19,7 @@
 #   | 9 | clone at the seed, then svc-b's file lands    | Y   | rejected -> recompute -> write, both ok |
 #   |10 | every row                                     |     | the remote's main is unchanged          |
 # then the entries the rule refuses (r1-r6), races and odd entries (101-111),
-# failure messages (F6, F7, F9-F11), the inputs action.yml passes (v1-v6), and
+# failure messages (F6, F7, F9-F12), the inputs action.yml passes (v1-v6), and
 # action.yml's own wiring: the checkout, the working directory, the command
 # line and the env names this harness binds.
 # Every refusal of the queue's state ends "GHCR holds <tag> but the queue does
@@ -36,7 +36,8 @@
 # `gh api repos/<repo>/compare/A...B?per_page=1 --jq .status` from the local service
 # repo with `git merge-base --is-ancestor` both ways (an unknown sha gives the
 # 404 shape: the JSON body on stdout, the message on stderr, rc 1; GH_DENY
-# gives GitHub's 403 for a token without `contents: read`, or a rate limit's); `sleep`
+# gives GitHub's 403 for a token without `contents: read`, a rate limit's 403,
+# or a 502); `sleep`
 # and `date` are stubs; every git remote is a local path, and git reads no
 # user or system config. The run refuses to start unless `command -v`
 # resolves gh, sleep and date to the stubs.
@@ -99,6 +100,10 @@ case "${GH_DENY:-}" in
     ratelimit)
         printf '%s' '{"message":"You have exceeded a secondary rate limit. Please wait a few minutes before you try again.","status":"403"}'
         echo "gh: You have exceeded a secondary rate limit. Please wait a few minutes before you try again. (HTTP 403)" >&2
+        exit 1 ;;
+    unavailable)
+        printf '%s' '{"message":"Server Error","status":"502"}'
+        echo "gh: Server Error (HTTP 502)" >&2
         exit 1 ;;
 esac
 if [ -n "${GH_TRANSPORT_FAIL:-}" ]; then
@@ -411,6 +416,11 @@ echo "== F11. a 403 rate limit is transient: retried like any other failure"
 mkrow f11 "$X" none; export GH_DENY=ratelimit; runrow "$Y"; unset GH_DENY; common "F11" 1
 expect "F11: three compares, sleeps 2s and 4s, then ::error:: after 3 attempts with the rate limit's line; image-queue unchanged" \
     '[[ "$(grep -c . <<< "$CALLS")" == 3 && "$SLEEPS" == 2 && "$SLEEP_ARGS" == "2 4 " && "$TIP" == "$SB_REMOTE_TIP" ]] && grep -qxF "::error::could not update the queue after 3 attempts: the compare $X...$Y failed: You have exceeded a secondary rate limit. Please wait a few minutes before you try again. (HTTP 403). $GHCR_Y" <<< "$OUT"' "$(ctx)"
+echo "== F12. a 5xx is transient: retried, never refused"
+mkrow f12 "$X" none; export GH_DENY=unavailable; runrow "$Y"; unset GH_DENY; common "F12" 1
+expect "F12: three compares, sleeps 2s and 4s, then ::error:: after 3 attempts with the 502's line; image-queue unchanged" \
+    '[[ "$(grep -c . <<< "$CALLS")" == 3 && "$SLEEPS" == 2 && "$SLEEP_ARGS" == "2 4 " && "$TIP" == "$SB_REMOTE_TIP" ]] && grep -qxF "::error::could not update the queue after 3 attempts: the compare $X...$Y failed: Server Error (HTTP 502). $GHCR_Y" <<< "$OUT"' "$(ctx)"
+
 echo "== v1. a service name that is not a queue file name: refused"
 mkrow v1 "" none; runrow "$Y" SERVICE_NAME="../svc-a"; common "v1" 1
 rejected "v1" "::error::the service input is not a queue file name (a-z, 0-9 and -, at most 63 characters)"

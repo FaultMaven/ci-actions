@@ -6,8 +6,9 @@
 # The queue only moves forward. An entry is replaced only when RUN_SHA
 # contains the queued commit; the same or an older commit is skipped; a
 # diverged commit, an entry no commit can be read from, or a missing queue
-# file fails the step; an unanswered compare is retried and never written; a
-# push rejected by a race (another writer moved image-queue before or during
+# file fails the step; an unanswered compare is retried and never written, but
+# one GitHub refuses (403 for a token without contents: read, or 404) fails
+# at once with its cause; a push rejected by a race (another writer moved image-queue before or during
 # the push) re-reads origin's entry and decides again; any other push failure
 # fails, "not as a race". Every refusal of the queue's state ends "GHCR holds
 # <tag> but the queue does not name it." (an invalid input exits before that).
