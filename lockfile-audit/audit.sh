@@ -57,19 +57,24 @@ for i in $(seq 1 "$attempts"); do
     timed_out=true
   fi
   printf '%s\n' "$out"
+  # Classify a copy without terminal escapes: with FORCE_COLOR set (or any
+  # colour source), pnpm writes the summary as ESC[31m1ESC[39m vulnerabilities
+  # found, which no ^[0-9] pattern matches. LC_ALL=C: under a UTF-8 locale the
+  # byte ranges below are collation ranges, and the escape survives.
+  plain="$(LC_ALL=C sed $'s#\x1b\\[[0-9;?]*[ -/]*[@-~]##g' <<<"$out")"
   if [ "$code" -eq 0 ]; then
     finish clean 0 "### Dependency audit: clean" "" \
       "\`${audit[*]}\` found no advisory at or above $level outside \`pnpm.auditConfig.ignoreGhsas\`."
   fi
   # Checked before the transport patterns, so an advisory whose title names a
   # network error is never taken for an outage.
-  if grep -qE '^[0-9]+ vulnerabilit(y|ies) found' <<<"$out"; then
+  if grep -qE '^[0-9]+ vulnerabilit(y|ies) found' <<<"$plain"; then
     echo "::error::pnpm audit found advisories at or above $level."
     finish advisories 1 "### Dependency audit: advisories found" "" \
       "\`${audit[*]}\` reported advisories at or above $level; the step log lists them." \
       "Bump or override each one. One with no fixed version may go in \`pnpm.auditConfig.ignoreGhsas\` only as this repository's rule for that list allows (see the gate's comment in ci.yml), with the reason in the PR that adds it."
   fi
-  if $timed_out || grep -qiE "$transport" <<<"$out" || only_retryable_statuses "$out"; then
+  if $timed_out || grep -qiE "$transport" <<<"$plain" || only_retryable_statuses "$plain"; then
     echo "::notice::Attempt $i/$attempts: npm's advisory endpoint is unreachable or failing (exit $code)."
     if [ "$i" -lt "$attempts" ]; then sleep $((i * 20)); fi
     continue

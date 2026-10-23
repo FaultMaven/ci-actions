@@ -112,6 +112,6 @@ tests/test-update-image-queue.sh
 tests/test-lockfile-audit.sh
 ```
 
-They run `update.sh` exactly as `action.yml` does (`bash --noprofile --norc
--eo pipefail`), against a local bare remote and a stub `gh`. Nothing reaches
-GitHub.
+Each runs its action's script exactly as `action.yml` does. The queue test runs
+it against a local bare remote and a stub `gh`; the audit test against a stub
+`pnpm`, `timeout` and `sleep`. Nothing reaches GitHub or npm.

@@ -15,8 +15,13 @@
 #   5xx and 403      a 503 and a 403 in one attempt        -> error at once, not retried
 #   other failure    exit 1 with no advisory line          -> error, 1
 #   bad input        on-unreachable: maybe                 -> error, 2, no attempt
-# The attempt time limit (a 90-second `timeout`) is not driven: the stub
-# `timeout` runs the command directly.
+#   429/502, 408     retryable statuses, as pnpm 10 and 9 print them -> retried
+#   real transports  ECONNRESET, ERR_SOCKET_TIMEOUT, ECONNREFUSED -> retried
+#   124 at once      a kill from outside the limit         -> error, not retried
+#   limit ran out    a 1 s copy whose stub waits out the limit (124, 137) -> retried
+#   coloured         the summary in terminal colour (FORCE_COLOR) -> advisories
+# The stub `timeout` logs its arguments (the 90 s limit and --kill-after are
+# asserted), and can exit 124 or 137 at once or after waiting out the limit.
 #
 # SAFETY: nothing here reaches npm. `pnpm`, `timeout` and `sleep` are stubs,
 # and the run refuses to start unless `command -v` resolves them to the stubs.
@@ -57,7 +62,10 @@ PNPM
 # timeout: drops its options and its duration, then runs the command.
 cat > "$BIN/timeout" <<'TIMEOUT'
 #!/bin/bash
+printf '%s\n' "$*" >> "$SC/timeouts"
+[ -n "${TO_NOW:-}" ] && exit "$TO_NOW"
 while [[ ${1:-} == --* ]]; do shift; done
+if [ -n "${TO_CODE:-}" ]; then /bin/sleep "$1"; exit "$TO_CODE"; fi
 shift
 exec "$@"
 TIMEOUT
@@ -88,7 +96,7 @@ row() {
     : > "$SC/output"; : > "$SC/summary"
     OUT="$(env SC="$SC" ON_UNREACHABLE="$on" npm_config_fetch_retries=0 \
         GITHUB_OUTPUT="$SC/output" GITHUB_STEP_SUMMARY="$SC/summary" \
-        bash "$SCRIPT" 2>&1)"; RC=$?
+        TO_CODE="${TO_CODE:-}" TO_NOW="${TO_NOW:-}" bash "${RUN_SCRIPT:-$SCRIPT}" 2>&1)"; RC=$?
     RESULT="$(sed -n 's/^result=//p' "$SC/output")"
     SUM="$(cat "$SC/summary")"
     CALLS="$(grep -c . "$SC/calls")"
@@ -101,7 +109,7 @@ outcome() { # label, rc, result, calls, sleeps, summary heading
     expect "$1: exits $2, result=$3, $4 attempt(s), sleeps [$5], summary '$6'" \
         '[[ "$RC" == "$W_RC" && "$RESULT" == "$W_RESULT" && "$CALLS" == "$W_CALLS" && "$SLEEPS" == "$W_SLEEPS" && "$SUM" == "$W_HEAD"* ]]' "$(ctx)"
 }
-NET='ERR_PNPM_AUDIT_BAD_RESPONSE  request to https://registry.npmjs.org/-/npm/v1/security/audits/quick failed, reason: ETIMEDOUT'
+NET=' ETIMEDOUT  request to https://registry.npmjs.org/-/npm/v1/security/audits/quick failed, reason: connect ETIMEDOUT 104.16.0.35:443'
 
 echo "== clean"
 row clean fail "0|No known vulnerabilities found"
@@ -116,7 +124,7 @@ expect "advisories: ::error:: names the level" 'grep -qxF "::error::pnpm audit f
 
 echo "== an advisory whose text names a network error"
 row advnet fail "1|lib: ETIMEDOUT handling (GHSA-xxxx)
-1 vulnerability found"
+1 vulnerabilities found"
 outcome "advisory+network" 1 advisories 1 "" "### Dependency audit: advisories found"
 
 echo "== the endpoint is down on every attempt, on-unreachable: fail"
@@ -136,12 +144,11 @@ row blip fail "1|$NET" "0|No known vulnerabilities found"
 outcome "blip" 0 clean 2 "20 " "### Dependency audit: clean"
 
 echo "== only 5xx statuses: retried"
-row only5xx fail "1|ERR_PNPM_AUDIT_BAD_RESPONSE  The audit endpoint (at https://registry.npmjs.org/-/npm/v1/security/audits/quick) responded with 503: Service Unavailable"
+row only5xx fail "1| ERR_PNPM_AUDIT_BAD_RESPONSE  The audit endpoint (at https://registry.npmjs.org/-/npm/v1/security/audits) responded with 503: Service Unavailable"
 outcome "5xx only" 1 unreachable 4 "20 40 60 " "### Dependency audit: DID NOT RUN"
 
 echo "== a 503 and a 403 in one attempt: not an outage"
-row mixed fail "1|The audit endpoint (at https://registry.npmjs.org/-/npm/v1/security/audits/quick) responded with 503: Service Unavailable
-The audit endpoint (at https://registry.npmjs.org/-/npm/v1/security/audits) responded with 403: Forbidden"
+row mixed fail "1| ERR_PNPM_AUDIT_BAD_RESPONSE  The audit endpoint (at https://registry.npmjs.org/-/npm/v1/security/audits/quick) responded with 503: Service Unavailable. Fallback endpoint (at https://registry.npmjs.org/-/npm/v1/security/audits) responded with 403: Forbidden"
 outcome "5xx and 403" 1 error 1 "" "### Dependency audit: failed"
 
 echo "== any other failure"
@@ -149,6 +156,14 @@ row other fail "1|ERR_PNPM_LOCKFILE_BREAKING_CHANGE  Lockfile /x/pnpm-lock.yaml 
 outcome "other failure" 1 error 1 "" "### Dependency audit: failed"
 expect "other failure: ::error:: says it failed without advisories" \
     'grep -qxF "::error::pnpm audit failed without reporting advisories." <<< "$OUT"' "$(ctx)"
+
+echo "== a coloured summary (FORCE_COLOR): still advisories"
+row colour fail "1|$(printf '\e[31m1\e[39m vulnerabilities found')"
+outcome "coloured summary" 1 advisories 1 "" "### Dependency audit: advisories found"
+echo "== a coloured summary whose advisory names a network error, under warn: still advisories, never retried"
+row colourwarn warn "1|lib: ECONNRESET on retry (GHSA-yyyy)
+$(printf '\e[31m1\e[39m vulnerabilities found')"
+outcome "coloured advisory+network, warn" 1 advisories 1 "" "### Dependency audit: advisories found"
 
 echo "== on-unreachable is neither fail nor warn"
 row badinput maybe "0|No known vulnerabilities found"
@@ -171,6 +186,18 @@ expect "it binds exactly this env map (the input, and npm's own retries off: aud
 WANT_OUT='${{ steps.audit.outputs.result }}'
 expect "the result output is the step's" '[[ "$(yq ".outputs.result.value" "$ACTION")" == "$WANT_OUT" ]]' "$(yq ".outputs" "$ACTION")"
 
+expect "clean: one 90 s limit with --kill-after=10" '[[ "$(cat "$WORK/clean/timeouts")" == "--kill-after=10 90 pnpm audit --audit-level=moderate" ]]' "$(cat "$WORK/clean/timeouts")"
+echo "== 429 and 502 (pnpm 10): retried"
+row r429 fail "1| ERR_PNPM_AUDIT_BAD_RESPONSE  The audit endpoint (at https://registry.npmjs.org/-/npm/v1/security/audits/quick) responded with 429: x. Fallback endpoint (at https://registry.npmjs.org/-/npm/v1/security/audits) responded with 502: y"
+outcome "429+502" 1 unreachable 4 "20 40 60 " "### Dependency audit: DID NOT RUN"
+row r408 fail "1| ERR_PNPM_AUDIT_BAD_RESPONSE  The audit endpoint (at https://registry.npmjs.org/-/npm/v1/security/audits) responded with 408: x"
+outcome "408" 1 unreachable 4 "20 40 60 " "### Dependency audit: DID NOT RUN"
+k=0; for e in "ECONNRESET  request to https://registry.npmjs.org/-/npm/v1/security/audits/quick failed, reason: read ECONNRESET" "ERR_SOCKET_TIMEOUT  request to https://registry.npmjs.org/-/npm/v1/security/audits/quick failed, reason: Socket timeout" "ECONNREFUSED  request to https://registry.npmjs.org/-/npm/v1/security/audits failed, reason: connect ECONNREFUSED 1.2.3.4:443"; do
+  row "net$((++k))" fail "1| $e"; outcome "real transport error ${e%% *}" 1 unreachable 4 "20 40 60 " "### Dependency audit: DID NOT RUN"; done
+echo "== 124 from outside the limit: not an outage"
+TO_NOW=124 row to_now fail "0|x"; outcome "124 at once" 1 error 0 "" "### Dependency audit: failed"
+sed 's/^attempt_seconds=[0-9]*$/attempt_seconds=1/' "$SCRIPT" > "$WORK/fast.sh"
+for c in 124 137; do RUN_SCRIPT="$WORK/fast.sh" TO_CODE=$c row "limit$c" fail "0|x"; outcome "limit ran out ($c)" 1 unreachable 0 "20 40 60 " "### Dependency audit: DID NOT RUN"; done
 echo ""
 echo "lockfile-audit: $PASS passed, $FAIL failed"
 [[ "$FAIL" -eq 0 ]]
