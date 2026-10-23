@@ -7,7 +7,7 @@ updates:
   # this entry is the only signal that one has a new release. Majors are
   # grouped apart, so a breaking major cannot hold back a patch.
   - package-ecosystem: "github-actions"
-    directories: ["/", "/update-image-queue"]
+    directories: ["/", "/update-image-queue", "/setup-js"]
     schedule:
       interval: "weekly"
     groups:

@@ -16,25 +16,15 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # The release tarball is checked against actionlint's published
-      # checksums before it runs.
+      # This repository's own gate is its lint-workflows action, so the
+      # action runs on every change.
       - name: actionlint
-        env:
-          ACTIONLINT_VERSION: '1.7.7'
-          ACTIONLINT_SHA256: 023070a287cd8cccd71515fedc843f1985bf96c436b7effaecce67290e7e0757
-          SHELLCHECK_OPTS: '-S warning'
-        run: |
-          set -euo pipefail
-          tgz="$RUNNER_TEMP/actionlint.tar.gz"
-          curl -fsSL -o "$tgz" "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
-          echo "${ACTIONLINT_SHA256}  ${tgz}" | sha256sum -c -
-          tar -xzf "$tgz" -C "$RUNNER_TEMP" actionlint
-          "$RUNNER_TEMP/actionlint" -color
+        uses: ./lint-workflows
 
       # actionlint reads workflows only, so the actions' scripts and the
       # tests are linted here.
       - name: shellcheck
-        run: shellcheck -S warning update-image-queue/*.sh lockfile-audit/*.sh tests/*.sh
+        run: shellcheck -S warning update-image-queue/*.sh lockfile-audit/*.sh setup-js/*.sh lint-workflows/*.sh tests/*.sh
 
   test:
     name: Test the actions
@@ -53,6 +43,61 @@ jobs:
       - name: Test lockfile-audit
         run: tests/test-lockfile-audit.sh
 
+      - name: Test setup-js
+        run: tests/test-setup-js.sh
+
+      - name: Test lint-workflows
+        run: tests/test-lint-workflows.sh
+
+  # setup-js for real: a fixture package.json declares Node 24 and pnpm 9.15.9,
+  # and each mode must set up exactly those, and install only when asked. The
+  # fixture's one dependency is a link: to a local directory, so an install
+  # writes node_modules without reaching the registry.
+  setup-js:
+    name: setup-js (${{ matrix.mode }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - mode: install
+            pnpm: 'true'
+            install: 'true'
+          - mode: no-install
+            pnpm: 'true'
+            install: 'false'
+          - mode: node-only
+            pnpm: 'false'
+            install: 'false'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Put the fixture at the workspace root
+        run: cp tests/fixtures/js/package.json tests/fixtures/js/pnpm-lock.yaml .
+
+      - uses: ./setup-js
+        with:
+          pnpm: ${{ matrix.pnpm }}
+          install: ${{ matrix.install }}
+
+      - name: Node and pnpm are the fixture's
+        env:
+          WANT_PNPM: ${{ matrix.pnpm }}
+          WANT_INSTALL: ${{ matrix.install }}
+        run: |
+          set -euo pipefail
+          node --version
+          [[ "$(node --version)" == v24.* ]] || { echo "::error::node is $(node --version), not 24.x"; exit 1; }
+          if [ "$WANT_PNPM" = true ]; then
+            [ "$(pnpm --version)" = 9.15.9 ] || { echo "::error::pnpm is $(pnpm --version), not 9.15.9"; exit 1; }
+          fi
+          if [ "$WANT_INSTALL" = true ]; then
+            [ -f node_modules/.modules.yaml ] && [ -L node_modules/setup-js-fixture-dep ] || { echo "::error::no install ran"; exit 1; }
+          else
+            [ ! -e node_modules ] || { echo "::error::an install ran with install: false"; exit 1; }
+          fi
+
   # actionlint checks a local action's inputs at every call site, and a
   # remote one's not at all, so this job calls the action the way callers do.
   # It never runs.
@@ -69,3 +114,8 @@ jobs:
       - uses: ./lockfile-audit
         with:
           on-unreachable: fail
+      - uses: ./setup-js
+        with:
+          pnpm: 'true'
+          install: 'false'
+      - uses: ./lint-workflows

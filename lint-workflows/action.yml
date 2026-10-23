@@ -1,0 +1,18 @@
+name: Lint workflows
+description: >-
+  Run actionlint, with shellcheck at -S warning, over the calling repository's
+  workflows. The actionlint release is downloaded and checked against its
+  published checksum before it runs.
+runs:
+  using: composite
+  steps:
+    - name: actionlint
+      shell: bash
+      env:
+        ACTIONLINT_VERSION: '1.7.7'
+        ACTIONLINT_SHA256: 023070a287cd8cccd71515fedc843f1985bf96c436b7effaecce67290e7e0757
+        # Below `warning`, the fleet's run: blocks emit dozens of SC2086 notes
+        # about an unquoted $GITHUB_OUTPUT: the kind of finding that teaches
+        # people to close a gate unread.
+        SHELLCHECK_OPTS: '-S warning'
+      run: bash --noprofile --norc -eo pipefail "$GITHUB_ACTION_PATH/lint.sh"

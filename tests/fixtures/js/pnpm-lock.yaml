@@ -1,0 +1,13 @@
+lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+importers:
+
+  .:
+    dependencies:
+      setup-js-fixture-dep:
+        specifier: link:tests/fixtures/js/dep
+        version: link:tests/fixtures/js/dep

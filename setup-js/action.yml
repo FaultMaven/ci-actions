@@ -1,0 +1,42 @@
+name: Set up pnpm and Node
+description: >-
+  Set up pnpm at the version package.json's `packageManager` names and Node at
+  the major its `engines.node` names, then, unless told not to, install the
+  lockfile frozen. The calling repository's package.json is the only place
+  either version is written.
+inputs:
+  pnpm:
+    description: '`true` or `false`: set up pnpm. `false` sets up Node only (for a job that runs no pnpm command).'
+    required: false
+    default: 'true'
+  install:
+    description: '`true` or `false`: run `pnpm install --frozen-lockfile`, with pnpm''s store cached. Needs `pnpm: true`.'
+    required: false
+    default: 'true'
+runs:
+  using: composite
+  steps:
+    - name: Check the inputs
+      shell: bash
+      env:
+        WANT_PNPM: ${{ inputs.pnpm }}
+        WANT_INSTALL: ${{ inputs.install }}
+      run: bash --noprofile --norc -eo pipefail "$GITHUB_ACTION_PATH/check-inputs.sh"
+
+    # No `version`: pnpm/action-setup reads package.json's packageManager.
+    - name: Set up pnpm
+      if: inputs.pnpm == 'true'
+      uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      with:
+        run_install: false
+
+    - name: Set up Node
+      uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      with:
+        node-version-file: package.json
+        cache: ${{ inputs.install == 'true' && 'pnpm' || '' }}
+
+    - name: Install dependencies
+      if: inputs.install == 'true'
+      shell: bash
+      run: pnpm install --frozen-lockfile
