@@ -1,5 +1,5 @@
 #!/bin/bash
-# Records SERVICE_NAME's image TAG, built from RUN_SHA, on
+# Records SERVICE_NAME's image sha-<first 7 of RUN_SHA>, built from RUN_SHA, on
 # faultmaven-enterprise-infra's image-queue branch. Run inside a checkout of
 # that branch.
 #
@@ -13,12 +13,14 @@
 # does not name it."
 #
 # action.yml runs this as `bash --noprofile --norc -eo pipefail update.sh`,
-# the form GitHub gives a `run:` step, so `-e` is on from the first line.
+# the form GitHub gives a `run:` step under `shell: bash`, so `-e` is on from
+# the first line.
 # tests/test-update-image-queue.sh runs it the same way.
 #
-# Environment, bound by action.yml: SERVICE_NAME, RUN_SHA, IMAGE_TAG (empty:
-# sha-<first 7 of RUN_SHA>), REPO, GH_TOKEN, TRIGGERED_BY, WORKFLOW_NAME,
-# GIT_AUTHOR_*/GIT_COMMITTER_*, GITHUB_STEP_SUMMARY.
+# Environment, bound by action.yml: SERVICE_NAME, RUN_SHA, REPO, GH_TOKEN,
+# TRIGGERED_BY, WORKFLOW_NAME, GIT_AUTHOR_*/GIT_COMMITTER_*,
+# GITHUB_STEP_SUMMARY. The tag is always sha-<first 7 of RUN_SHA>: the rule
+# orders an entry by its commit, and refuses one whose tag names another.
 
 # The inputs become a path, a commit message and annotations, so each is
 # checked before anything is read or written, and none is echoed back raw.
@@ -30,13 +32,9 @@ if ! [[ ${RUN_SHA:-} =~ ^[0-9a-f]{40}$ ]]; then
   echo "::error::the sha input is not a full 40-character lower-case commit sha"
   exit 1
 fi
-if [[ -n ${IMAGE_TAG:-} ]] && ! [[ $IMAGE_TAG =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]; then
-  echo "::error::the tag input is not a valid image tag"
-  exit 1
-fi
 
 QUEUE_FILE="available-images/staging/${SERVICE_NAME}.yaml"
-TAG="${IMAGE_TAG:-sha-${RUN_SHA:0:7}}"
+TAG="sha-${RUN_SHA:0:7}"
 COMMIT_MSG="chore(queue): update ${SERVICE_NAME} image to ${TAG}
 
 Built from: ${REPO}@${RUN_SHA}

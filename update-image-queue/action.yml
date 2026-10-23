@@ -9,10 +9,6 @@ inputs:
   sha:
     description: The full commit sha the image was built from.
     required: true
-  tag:
-    description: The image tag to record. Empty means sha-<first 7 characters of sha>.
-    required: false
-    default: ''
   token:
     description: >-
       An installation token of the faultmaven-infra-queue-bot App, scoped to
@@ -52,7 +48,6 @@ runs:
       env:
         SERVICE_NAME: ${{ inputs.service }}
         RUN_SHA: ${{ inputs.sha }}
-        IMAGE_TAG: ${{ inputs.tag }}
         REPO: ${{ github.repository }}
         GH_TOKEN: ${{ inputs.github-token }}
         TRIGGERED_BY: ${{ github.actor }}

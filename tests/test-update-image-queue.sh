@@ -19,7 +19,7 @@
 #   | 9 | clone at the seed, then svc-b's file lands    | Y   | rejected -> recompute -> write, both ok |
 #   |10 | every row                                     |     | the remote's main is unchanged          |
 # then the entries the rule refuses (r1-r6), races and odd entries (101-111),
-# failure messages (F6, F7, F9), the inputs action.yml passes (v1-v3, t1), and
+# failure messages (F6, F7, F9), the inputs action.yml passes (v1-v5), and
 # action.yml's own wiring: the checkout, the working directory, the command
 # line and the env names this harness binds.
 # Every red exit ends "GHCR holds <tag> but the queue does not name it."
@@ -179,7 +179,7 @@ mkrow() { # name, svc-a's seeded commit ('' = empty), race, [entry]
 runrow() { # run commit, [NAME=value]...
     local run="$1"; shift
     : > "$GH_LOG"; : > "$SLEEP_LOG"; : > "$SB/summary"
-    OUT="$(cd "$SB/infra" && env SERVICE_NAME=svc-a RUN_SHA="$run" IMAGE_TAG= REPO=FaultMaven/svc-a \
+    OUT="$(cd "$SB/infra" && env SERVICE_NAME=svc-a RUN_SHA="$run" REPO=FaultMaven/svc-a \
         TRIGGERED_BY=tester WORKFLOW_NAME="Publish Docker" GITHUB_STEP_SUMMARY="$SB/summary" "$@" \
         bash --noprofile --norc -eo pipefail "$SCRIPT" 2>&1)"; RC=$?
     SUM="$(cat "$SB/summary")"; CALLS="$(cat "$GH_LOG")"
@@ -395,14 +395,15 @@ rejected "v1" "::error::the service input is not a queue file name (a-z, 0-9 and
 echo "== v2. a short sha: refused"
 mkrow v2 "" none; runrow "${Y:0:7}"; common "v2" 1
 rejected "v2" "::error::the sha input is not a full 40-character lower-case commit sha"
-echo "== v3. a tag with a space and a newline: refused, never echoed"
-mkrow v3 "" none; runrow "$Y" IMAGE_TAG=$'bad tag\n::warning::x'; common "v3" 1
-rejected "v3" "::error::the tag input is not a valid image tag"
-
-echo "== t1. an explicit tag: written as given, with the run's commit"
-mkrow t1 "$X" none; runrow "$Y" IMAGE_TAG=v1.2.3-rc.1; common "t1" 0
-expect "t1: tag v1.2.3-rc.1 and commit_sha Y are written; the commit message and the summary name the tag" \
-    '[[ "$A_TAG" == "v1.2.3-rc.1" && "$A_COMMIT" == "$Y" ]] && grep -qxF "✓ Updated image queue: v1.2.3-rc.1" <<< "$OUT" && [[ "$(git -C "$SB/remote.git" log -1 --format=%s image-queue)" == "chore(queue): update svc-a image to v1.2.3-rc.1" && "$SUM" == "## Image queue updated"* && "$SUM" == *'"'"'- Tag: `v1.2.3-rc.1`'"'"'* ]]' "$(ctx)"
+echo "== v3. a service name with a path after a valid prefix: refused (the check is anchored)"
+mkrow v3 "" none; runrow "$Y" SERVICE_NAME="svc-a/../x"; common "v3" 1
+rejected "v3" "::error::the service input is not a queue file name (a-z, 0-9 and -, at most 63 characters)"
+echo "== v4. a service name with a second line: refused, never echoed"
+mkrow v4 "" none; runrow "$Y" SERVICE_NAME=$'svc-a\n::warning::x'; common "v4" 1
+rejected "v4" "::error::the service input is not a queue file name (a-z, 0-9 and -, at most 63 characters)"
+echo "== v5. a sha with text after its 40 hex: refused (the check is anchored)"
+mkrow v5 "" none; runrow "${Y}/../x"; common "v5" 1
+rejected "v5" "::error::the sha input is not a full 40-character lower-case commit sha"
 
 echo "== s1. a write records the tag and the file in the step summary"
 mkrow s1 "" none; runrow "$Y"; common "s1" 0
@@ -417,14 +418,28 @@ expect "the only checkout is FaultMaven/faultmaven-enterprise-infra at ref image
 upd='.runs.steps[] | select(.name == "Update and push the queue file")'
 expect "the update step runs in the checkout's path" \
     '[[ "$(yq "$upd | .[\"working-directory\"]" "$ACTION")" == "\${{ inputs.path }}" ]]' "$(yq "$upd" "$ACTION")"
-# shellcheck disable=SC2016,SC2034  # the literal command line, as action.yml spells it; read inside expect's eval
+# shellcheck disable=SC2016,SC2034  # literal GitHub expressions and command line, as action.yml spells them; read inside expect's eval
 WANT_RUN='bash --noprofile --norc -eo pipefail "$GITHUB_ACTION_PATH/update.sh"'
 expect "the update step's command line is the one this harness runs (GitHub's -eo pipefail form)" \
     '[[ "$(yq "$upd | .run" "$ACTION")" == "$WANT_RUN" ]]' "$(yq "$upd | .run" "$ACTION")"
-expect "the update step binds exactly the env names this harness binds" \
-    '[[ "$(yq "$upd | .env | keys | join(\",\")" "$ACTION")" == "SERVICE_NAME,RUN_SHA,IMAGE_TAG,REPO,GH_TOKEN,TRIGGERED_BY,WORKFLOW_NAME,GIT_AUTHOR_NAME,GIT_AUTHOR_EMAIL,GIT_COMMITTER_NAME,GIT_COMMITTER_EMAIL" ]]' "$(yq "$upd | .env" "$ACTION")"
+# The whole env map, names and values: the run's commit is the input sha (never
+# github.sha, which a workflow_run sets to main's tip), the compare reads this
+# repository with github-token (the App token cannot), and the identity is the
+# one this harness exports.
+# shellcheck disable=SC2016,SC2034  # literal GitHub expressions; read inside expect's eval
+WANT_ENV='{"SERVICE_NAME":"${{ inputs.service }}","RUN_SHA":"${{ inputs.sha }}","REPO":"${{ github.repository }}","GH_TOKEN":"${{ inputs.github-token }}","TRIGGERED_BY":"${{ github.actor }}","WORKFLOW_NAME":"${{ github.workflow }}","GIT_AUTHOR_NAME":"faultmaven-infra-queue-bot[bot]","GIT_AUTHOR_EMAIL":"faultmaven-infra-queue-bot[bot]@users.noreply.github.com","GIT_COMMITTER_NAME":"faultmaven-infra-queue-bot[bot]","GIT_COMMITTER_EMAIL":"faultmaven-infra-queue-bot[bot]@users.noreply.github.com"}'
+expect "the update step binds exactly this env map, names and values" \
+    '[[ "$(yq -o=json -I0 "$upd | .env" "$ACTION")" == "$WANT_ENV" ]]' "$(yq -o=json -I0 "$upd | .env" "$ACTION")"
 expect "the commit identity action.yml binds is the one this harness exports" \
     '[[ "$(yq "$upd | .env.GIT_AUTHOR_NAME" "$ACTION")" == "$GIT_AUTHOR_NAME" && "$(yq "$upd | .env.GIT_COMMITTER_EMAIL" "$ACTION")" == "$GIT_COMMITTER_EMAIL" ]]' "$(yq "$upd | .env" "$ACTION")"
+# The push relies on the checkout's persisted credentials, so its with: keys
+# are exactly these four (no persist-credentials: false).
+expect "the checkout's with: keys are exactly repository, ref, token and path" \
+    '[[ "$(yq -n "$co | keys | sort | join(\",\")")" == "path,ref,repository,token" ]]' "$co"
+# GitHub refuses to load a composite action whose run step has no shell, and
+# actionlint does not lint action metadata.
+expect "every run step of the action declares shell: bash" \
+    '[[ "$(yq "[.runs.steps[] | select(has(\"run\")) | select(.shell != \"bash\")] | length" "$ACTION")" == 0 && "$(yq "[.runs.steps[] | select(has(\"run\"))] | length" "$ACTION")" == 2 ]]' "$(yq ".runs.steps" "$ACTION")"
 expect "yq is installed by install-yq.sh, in the same form, before the update" \
     '[[ "$(yq ".runs.steps[1].run" "$ACTION")" == "bash --noprofile --norc -eo pipefail \"\$GITHUB_ACTION_PATH/install-yq.sh\"" && "$(yq ".runs.steps[2].name" "$ACTION")" == "Update and push the queue file" ]]' "$(yq ".runs.steps" "$ACTION")"
 

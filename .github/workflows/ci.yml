@@ -62,5 +62,4 @@ jobs:
         with:
           service: faultmaven
           sha: ${{ github.sha }}
-          tag: sha-0000000
           token: ${{ github.token }}

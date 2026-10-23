@@ -6,7 +6,7 @@ every fix had to be found and made once per copy.
 
 | Action | What it does |
 |---|---|
-| [`update-image-queue`](update-image-queue/action.yml) | Records a service's new image tag on `faultmaven-enterprise-infra`'s `image-queue` branch, moving the queue only forward |
+| [`update-image-queue`](update-image-queue/action.yml) | Records a service's new image (`sha-<first 7 of the commit>`) on `faultmaven-enterprise-infra`'s `image-queue` branch, moving the queue only forward |
 
 ## `update-image-queue`
 
@@ -36,7 +36,6 @@ Call it after the job that pushed the image, on the default branch only:
 |---|---|---|
 | `service` | yes | The queue file's name under `available-images/staging/` (`a-z`, `0-9`, `-`) |
 | `sha` | yes | The full 40-character commit the image was built from |
-| `tag` | no | The image tag to record. Empty means `sha-<first 7 characters of sha>` |
 | `token` | yes | An installation token of the `faultmaven-infra-queue-bot` App, scoped to `faultmaven-enterprise-infra` |
 | `github-token` | no | A token that reads this repository's commits, for the compare that orders the queue. The default is `github.token` |
 | `path` | no | Where to check out `image-queue`, relative to the workspace. The default is `.image-queue` |
@@ -56,7 +55,9 @@ of these is refused, and nothing is written:
 An unanswered compare is retried, never written. A push rejected by a race
 (another writer moved `image-queue` before or during the push) re-reads
 origin's entry and decides again; any other push failure fails the step. Every
-red exit ends `GHCR holds <tag> but the queue does not name it.`
+refusal of the queue's state ends `GHCR holds <tag> but the queue does not name it.` The tag is always
+`sha-<first 7 of sha>`, the image tag every caller pushes: the rule orders an
+entry by its commit and refuses one whose tag names another commit.
 
 ## Versions
 
@@ -76,6 +77,10 @@ since. This repository's CI must be green:
 
 A new release then reaches each caller as a sha bump, which runs that caller's
 CI.
+
+yq (`install-yq.sh`) and actionlint (`ci.yml`) are release binaries pinned
+with their published checksums; Dependabot does not track them, so they are
+bumped by hand.
 
 Run the tests locally with git and mikefarah yq v4 on `PATH`:
 
