@@ -34,10 +34,10 @@ jobs:
       # actionlint reads workflows only, so the actions' scripts and the
       # tests are linted here.
       - name: shellcheck
-        run: shellcheck -S warning update-image-queue/*.sh tests/*.sh
+        run: shellcheck -S warning update-image-queue/*.sh lockfile-audit/*.sh tests/*.sh
 
   test:
-    name: Test update-image-queue
+    name: Test the actions
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -47,8 +47,11 @@ jobs:
       - name: Install yq
         run: bash --noprofile --norc -eo pipefail update-image-queue/install-yq.sh
 
-      - name: Run the tests
+      - name: Test update-image-queue
         run: tests/test-update-image-queue.sh
+
+      - name: Test lockfile-audit
+        run: tests/test-lockfile-audit.sh
 
   # actionlint checks a local action's inputs at every call site, and a
   # remote one's not at all, so this job calls the action the way callers do.
@@ -63,3 +66,6 @@ jobs:
           service: faultmaven
           sha: ${{ github.sha }}
           token: ${{ github.token }}
+      - uses: ./lockfile-audit
+        with:
+          on-unreachable: fail
