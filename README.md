@@ -8,6 +8,8 @@ every fix had to be found and made once per copy.
 |---|---|
 | [`update-image-queue`](update-image-queue/action.yml) | Records a service's new image (`sha-<first 7 of the commit>`) on `faultmaven-enterprise-infra`'s `image-queue` branch, moving the queue only forward |
 | [`lockfile-audit`](lockfile-audit/action.yml) | Audits `pnpm-lock.yaml` with `pnpm audit` at moderate and above, retrying only while npm's advisory endpoint is down |
+| [`setup-js`](setup-js/action.yml) | Sets up pnpm and Node at the versions the repository's `package.json` declares, then installs the lockfile frozen |
+| [`lint-workflows`](lint-workflows/action.yml) | Runs a checksum-verified actionlint, with shellcheck at `-S warning`, over the repository's workflows |
 
 ## `update-image-queue`
 
@@ -82,6 +84,35 @@ whose every HTTP status is 5xx, 408 or 429, is retried: four attempts, 90 second
 20/40/60 seconds apart. Anything else fails at once. A repository's accepted
 exceptions are its own `pnpm.auditConfig.ignoreGhsas`.
 
+## `setup-js`
+
+```yaml
+- uses: actions/checkout@<sha> # vX
+- uses: FaultMaven/ci-actions/setup-js@<release commit sha> # vX.Y.Z
+  # with:
+  #   install: 'false'   # pnpm and Node only (an audit)
+  #   pnpm: 'false'      # Node only, with install: 'false' (a script with no pnpm command)
+```
+
+pnpm is the version `package.json`'s `packageManager` names; Node is the major
+its `engines.node` names. Neither is ever written in a workflow. With
+`install: true` (the default) it runs `pnpm install --frozen-lockfile`, with
+pnpm's store cached.
+
+## `lint-workflows`
+
+```yaml
+- uses: actions/checkout@<sha> # vX
+- uses: FaultMaven/ci-actions/lint-workflows@<release commit sha> # vX.Y.Z
+```
+
+Downloads actionlint 1.7.7, refuses it unless it matches the release's
+published checksum, and runs it over `.github/workflows/` with shellcheck at
+`-S warning`. Note that actionlint checks a *remote* action's `with:` keys and
+outputs only for an action pinned by a tag it has a record of; this
+repository's own CI calls each of its actions locally so their inputs are
+checked here.
+
 ## Versions
 
 Releases are semver tags, published as immutable releases. Callers pin the
@@ -96,12 +127,14 @@ fix commit for that review's findings, and delta reviews of only what changed
 since. This repository's CI must be green:
 - actionlint, which also checks the action's inputs at a call site;
 - shellcheck at `-S warning`;
-- `tests/test-update-image-queue.sh` and `tests/test-lockfile-audit.sh`.
+- `tests/test-update-image-queue.sh`, `tests/test-lockfile-audit.sh`,
+  `tests/test-setup-js.sh` and `tests/test-lint-workflows.sh`, plus a
+  `setup-js` job that sets up a fixture `package.json` for real.
 
 A new release then reaches each caller as a sha bump, which runs that caller's
 CI.
 
-yq (`install-yq.sh`) and actionlint (`ci.yml`) are release binaries pinned
+yq (`install-yq.sh`) and actionlint (`lint-workflows`) are release binaries pinned
 with their published checksums; Dependabot does not track them, so they are
 bumped by hand.
 
@@ -110,6 +143,8 @@ Run the tests locally with git and mikefarah yq v4 on `PATH`:
 ```bash
 tests/test-update-image-queue.sh
 tests/test-lockfile-audit.sh
+tests/test-setup-js.sh
+tests/test-lint-workflows.sh
 ```
 
 Each runs its action's script exactly as `action.yml` does. The queue test runs
