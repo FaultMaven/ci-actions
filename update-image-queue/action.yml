@@ -16,7 +16,7 @@ inputs:
       key never reaches this action.
     required: true
   github-token:
-    description: A token that reads this repository's commits, for the compare that orders the queue.
+    description: 'A token that reads this repository''s commits, for the compare that orders the queue. The default needs the job''s `contents: read`.'
     required: false
     default: ${{ github.token }}
   path:

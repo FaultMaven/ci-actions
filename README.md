@@ -40,12 +40,17 @@ Call it after the job that pushed the image, on the default branch only:
 | `service` | yes | The queue file's name under `available-images/staging/` (`a-z`, `0-9`, `-`) |
 | `sha` | yes | The full 40-character commit the image was built from |
 | `token` | yes | An installation token of the `faultmaven-infra-queue-bot` App, scoped to `faultmaven-enterprise-infra` |
-| `github-token` | no | A token that reads this repository's commits, for the compare that orders the queue. The default is `github.token` |
+| `github-token` | no | A token that reads this repository's commits, for the compare that orders the queue. The default is `github.token`, which needs the job's `contents: read` |
 | `path` | no | Where to check out `image-queue`, relative to the workspace. The default is `.image-queue` |
 
 **The caller mints the token**, so the App's private key never reaches this
 action. The token can write `image-queue` and open pull requests; no ruleset
 lets it bypass `main`.
+
+**The job needs `contents: read`** (`permissions: contents: read` beside
+whatever the image push needs) for the compare. Without it, in a private
+repository the first write succeeds, because an empty entry needs no compare,
+and every later one fails: `the compare … failed: Not Found (HTTP 404)`.
 
 **The rule.** An entry is replaced only when the run's commit contains the
 queued commit. The same commit, or an older one, is skipped with a notice. Each
