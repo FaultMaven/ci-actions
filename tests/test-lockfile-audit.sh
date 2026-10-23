@@ -96,7 +96,8 @@ row() {
     : > "$SC/output"; : > "$SC/summary"
     OUT="$(env SC="$SC" ON_UNREACHABLE="$on" npm_config_fetch_retries=0 \
         GITHUB_OUTPUT="$SC/output" GITHUB_STEP_SUMMARY="$SC/summary" \
-        TO_CODE="${TO_CODE:-}" TO_NOW="${TO_NOW:-}" bash "${RUN_SCRIPT:-$SCRIPT}" 2>&1)"; RC=$?
+        TO_CODE="${TO_CODE:-}" TO_NOW="${TO_NOW:-}" ${ROW_LC_ALL:+LC_ALL="$ROW_LC_ALL"} \
+        bash "${RUN_SCRIPT:-$SCRIPT}" 2>&1)"; RC=$?
     RESULT="$(sed -n 's/^result=//p' "$SC/output")"
     SUM="$(cat "$SC/summary")"
     CALLS="$(grep -c . "$SC/calls")"
@@ -157,11 +158,16 @@ outcome "other failure" 1 error 1 "" "### Dependency audit: failed"
 expect "other failure: ::error:: says it failed without advisories" \
     'grep -qxF "::error::pnpm audit failed without reporting advisories." <<< "$OUT"' "$(ctx)"
 
+# The coloured rows run under en_US.UTF-8, where sed's byte ranges are
+# collation ranges: audit.sh's LC_ALL=C is what makes the stripping work
+# there, and the runner's default C.UTF-8 would hide its removal.
+UTF8_LOCALE="$(locale -a 2>/dev/null | grep -iE '^en_US\.utf-?8$' | head -1)"
+[ -n "$UTF8_LOCALE" ] || { echo "the en_US.UTF-8 locale is required for the coloured rows (locale -a lists none)"; exit 1; }
 echo "== a coloured summary (FORCE_COLOR): still advisories"
-row colour fail "1|$(printf '\e[31m1\e[39m vulnerabilities found')"
+ROW_LC_ALL="$UTF8_LOCALE" row colour fail "1|$(printf '\e[31m1\e[39m vulnerabilities found')"
 outcome "coloured summary" 1 advisories 1 "" "### Dependency audit: advisories found"
 echo "== a coloured summary whose advisory names a network error, under warn: still advisories, never retried"
-row colourwarn warn "1|lib: ECONNRESET on retry (GHSA-yyyy)
+ROW_LC_ALL="$UTF8_LOCALE" row colourwarn warn "1|lib: ECONNRESET on retry (GHSA-yyyy)
 $(printf '\e[31m1\e[39m vulnerabilities found')"
 outcome "coloured advisory+network, warn" 1 advisories 1 "" "### Dependency audit: advisories found"
 
@@ -197,6 +203,8 @@ k=0; for e in "ECONNRESET  request to https://registry.npmjs.org/-/npm/v1/securi
 echo "== 124 from outside the limit: not an outage"
 TO_NOW=124 row to_now fail "0|x"; outcome "124 at once" 1 error 0 "" "### Dependency audit: failed"
 sed 's/^attempt_seconds=[0-9]*$/attempt_seconds=1/' "$SCRIPT" > "$WORK/fast.sh"
+# Fail, not hang: an unrewritten copy would wait out the real limit.
+grep -qx 'attempt_seconds=1' "$WORK/fast.sh" || { echo "the fast copy's attempt_seconds was not rewritten"; exit 1; }
 for c in 124 137; do RUN_SCRIPT="$WORK/fast.sh" TO_CODE=$c row "limit$c" fail "0|x"; outcome "limit ran out ($c)" 1 unreachable 0 "20 40 60 " "### Dependency audit: DID NOT RUN"; done
 echo ""
 echo "lockfile-audit: $PASS passed, $FAIL failed"
