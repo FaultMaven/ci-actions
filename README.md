@@ -50,8 +50,9 @@ lets it bypass `main`.
 **The job needs `contents: read`** (`permissions: contents: read` beside
 whatever else the job needs) for the compare. Without it, in a private
 repository the first write succeeds, because an empty entry needs no compare,
-and every later run of any commit other than the queued one fails after
-three attempts with `the compare … failed:` and GitHub's refusal.
+and every later run of any commit other than the queued one fails at once:
+`github-token cannot read <repo>'s commits (…): the calling job needs
+permissions: contents: read`.
 
 **The rule.** An entry is replaced only when the run's commit contains the
 queued commit. The same commit, or an older one, is skipped with a notice. Each
@@ -61,7 +62,11 @@ of these is refused, and nothing is written:
 - a missing queue file;
 - an invalid input.
 
-An unanswered compare is retried, never written. A push rejected by a race
+An unanswered compare is retried, never written. A compare GitHub refuses is
+not retried, because neither refusal passes: a token without `contents: read`
+(403 "Resource not accessible by integration") and a commit the repository
+does not hold, or cannot be seen with the token (404), each fail at once with
+the cause named. A push rejected by a race
 (another writer moved `image-queue` before or during the push) re-reads
 origin's entry and decides again; any other push failure fails the step. Every
 refusal of the queue's state ends `GHCR holds <tag> but the queue does not name it.` The tag is always

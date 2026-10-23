@@ -6,8 +6,9 @@
 # The queue only moves forward. An entry is replaced only when RUN_SHA
 # contains the queued commit; the same or an older commit is skipped; a
 # diverged commit, an entry no commit can be read from, or a missing queue
-# file fails the step; an unanswered compare is retried and never written; a
-# push rejected by a race (another writer moved image-queue before or during
+# file fails the step; an unanswered compare is retried and never written, but
+# one GitHub refuses (403 for a token without contents: read, or 404) fails
+# at once with its cause; a push rejected by a race (another writer moved image-queue before or during
 # the push) re-reads origin's entry and decides again; any other push failure
 # fails, "not as a race". Every refusal of the queue's state ends "GHCR holds
 # <tag> but the queue does not name it." (an invalid input exits before that).
@@ -85,7 +86,7 @@ push_err() {
 # Sets DECISION (write, skip, refuse or retry), REASON and DETAIL from
 # the queue entry as it stands, and Q to the commit it names.
 decide() {
-  local rc status sha tag
+  local rc status sha tag err
   DECISION=""
   REASON=""
   DETAIL=""
@@ -134,8 +135,27 @@ decide() {
   rc=0
   status="$(gh api "repos/${REPO}/compare/${Q}...${RUN_SHA}?per_page=1" --jq .status 2>"$ERR")" || rc=$?
   if [ "$rc" -ne 0 ]; then
-    DECISION="retry"
-    REASON="the compare ${Q}...${RUN_SHA} failed: $(first_err)"
+    # Two refusals are not transient, so they are not retried (#5). A token
+    # without `contents: read` gets 403 "Resource not accessible by
+    # integration" (observed in a private repository); a commit the
+    # repository does not hold, or a repository the token cannot see, gets
+    # 404. Any other failure, a 403 rate limit included, is retried.
+    err="$(first_err)"
+    case "$err" in
+      *"Resource not accessible by integration"*"(HTTP 403)")
+        DECISION="refuse"
+        REASON="github-token cannot read ${REPO}'s commits (the compare ${Q}...${RUN_SHA} answered '${err}'): the calling job needs permissions: contents: read"
+        DETAIL=""
+        ;;
+      *"(HTTP 404)")
+        DECISION="refuse"
+        REASON="the compare ${Q}...${RUN_SHA} answered '${err}': one of them is not a commit of ${REPO} (a rewritten history?), or github-token cannot see ${REPO}"
+        ;;
+      *)
+        DECISION="retry"
+        REASON="the compare ${Q}...${RUN_SHA} failed: ${err}"
+        ;;
+    esac
     return 0
   fi
   case "$status" in
@@ -172,7 +192,7 @@ for attempt in 1 2 3; do
       exit 0
       ;;
     refuse)
-      annotate error "${REASON}: ${DETAIL}. The queue is left as it is. ${GHCR}"
+      annotate error "${REASON}${DETAIL:+: ${DETAIL}}. The queue is left as it is. ${GHCR}"
       exit 1
       ;;
     retry)
