@@ -48,9 +48,10 @@ action. The token can write `image-queue` and open pull requests; no ruleset
 lets it bypass `main`.
 
 **The job needs `contents: read`** (`permissions: contents: read` beside
-whatever the image push needs) for the compare. Without it, in a private
+whatever else the job needs) for the compare. Without it, in a private
 repository the first write succeeds, because an empty entry needs no compare,
-and every later one fails: `the compare … failed: Not Found (HTTP 404)`.
+and every later run of a new commit fails after three attempts with `the
+compare … failed:` and GitHub's refusal.
 
 **The rule.** An entry is replaced only when the run's commit contains the
 queued commit. The same commit, or an older one, is skipped with a notice. Each
