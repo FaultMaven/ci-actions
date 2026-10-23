@@ -9,8 +9,8 @@
 # file fails the step; an unanswered compare is retried and never written; a
 # push rejected by a race (another writer moved image-queue before or during
 # the push) re-reads origin's entry and decides again; any other push failure
-# fails, "not as a race". Every red exit ends "GHCR holds <tag> but the queue
-# does not name it."
+# fails, "not as a race". Every refusal of the queue's state ends "GHCR holds
+# <tag> but the queue does not name it." (an invalid input exits before that).
 #
 # action.yml runs this as `bash --noprofile --norc -eo pipefail update.sh`,
 # the form GitHub gives a `run:` step under `shell: bash`, so `-e` is on from

@@ -19,10 +19,11 @@
 #   | 9 | clone at the seed, then svc-b's file lands    | Y   | rejected -> recompute -> write, both ok |
 #   |10 | every row                                     |     | the remote's main is unchanged          |
 # then the entries the rule refuses (r1-r6), races and odd entries (101-111),
-# failure messages (F6, F7, F9), the inputs action.yml passes (v1-v5), and
+# failure messages (F6, F7, F9), the inputs action.yml passes (v1-v6), and
 # action.yml's own wiring: the checkout, the working directory, the command
 # line and the env names this harness binds.
-# Every red exit ends "GHCR holds <tag> but the queue does not name it."
+# Every refusal of the queue's state ends "GHCR holds <tag> but the queue does
+# not name it."
 #
 # The script runs as `bash --noprofile --norc -eo pipefail update.sh`, the
 # form GitHub gives a `run:` step and the command action.yml runs, so `-e` is
@@ -404,6 +405,9 @@ rejected "v4" "::error::the service input is not a queue file name (a-z, 0-9 and
 echo "== v5. a sha with text after its 40 hex: refused (the check is anchored)"
 mkrow v5 "" none; runrow "${Y}/../x"; common "v5" 1
 rejected "v5" "::error::the sha input is not a full 40-character lower-case commit sha"
+echo "== v6. a sha with text before its 40 hex: refused (the check is anchored at both ends)"
+mkrow v6 "" none; runrow "../${Y}"; common "v6" 1
+rejected "v6" "::error::the sha input is not a full 40-character lower-case commit sha"
 
 echo "== s1. a write records the tag and the file in the step summary"
 mkrow s1 "" none; runrow "$Y"; common "s1" 0
