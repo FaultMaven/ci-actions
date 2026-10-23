@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The release tarball is checked against actionlint's published
+      # checksums before it runs.
+      - name: actionlint
+        env:
+          ACTIONLINT_VERSION: '1.7.7'
+          ACTIONLINT_SHA256: 023070a287cd8cccd71515fedc843f1985bf96c436b7effaecce67290e7e0757
+          SHELLCHECK_OPTS: '-S warning'
+        run: |
+          set -euo pipefail
+          tgz="$RUNNER_TEMP/actionlint.tar.gz"
+          curl -fsSL -o "$tgz" "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          echo "${ACTIONLINT_SHA256}  ${tgz}" | sha256sum -c -
+          tar -xzf "$tgz" -C "$RUNNER_TEMP" actionlint
+          "$RUNNER_TEMP/actionlint" -color
+
+      # actionlint reads workflows only, so the actions' scripts and the
+      # tests are linted here.
+      - name: shellcheck
+        run: shellcheck -S warning update-image-queue/*.sh tests/*.sh
+
+  test:
+    name: Test update-image-queue
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The same yq the action installs.
+      - name: Install yq
+        run: bash --noprofile --norc -eo pipefail update-image-queue/install-yq.sh
+
+      - name: Run the tests
+        run: tests/test-update-image-queue.sh
+
+  # actionlint checks a local action's inputs at every call site, and a
+  # remote one's not at all, so this job calls the action the way callers do.
+  # It never runs.
+  inputs:
+    name: Action inputs (never runs)
+    if: ${{ false }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: ./update-image-queue
+        with:
+          service: faultmaven
+          sha: ${{ github.sha }}
+          tag: sha-0000000
+          token: ${{ github.token }}
