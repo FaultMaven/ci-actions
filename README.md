@@ -7,6 +7,7 @@ every fix had to be found and made once per copy.
 | Action | What it does |
 |---|---|
 | [`update-image-queue`](update-image-queue/action.yml) | Records a service's new image (`sha-<first 7 of the commit>`) on `faultmaven-enterprise-infra`'s `image-queue` branch, moving the queue only forward |
+| [`lockfile-audit`](lockfile-audit/action.yml) | Audits `pnpm-lock.yaml` with `pnpm audit` at moderate and above, retrying only while npm's advisory endpoint is down |
 
 ## `update-image-queue`
 
@@ -59,6 +60,28 @@ refusal of the queue's state ends `GHCR holds <tag> but the queue does not name 
 `sha-<first 7 of sha>`, the image tag every caller pushes: the rule orders an
 entry by its commit and refuses one whose tag names another commit.
 
+## `lockfile-audit`
+
+Call it in a checkout of the repository, after pnpm and Node are set up (no
+install needed):
+
+```yaml
+- name: Audit lockfile
+  uses: FaultMaven/ci-actions/lockfile-audit@<release commit sha> # vX.Y.Z
+  with:
+    on-unreachable: fail   # or warn
+```
+
+| Input | Required | Meaning |
+|---|---|---|
+| `on-unreachable` | yes | `fail` or `warn`: what to do when npm's advisory endpoint stays unreachable after every attempt, so that no audit ran |
+
+Its output `result` is `clean`, `advisories`, `error` or `unreachable`, and every path writes one
+job-summary block. An advisory fails the step at once. A transport error, or an answer
+whose every HTTP status is 5xx, 408 or 429, is retried: four attempts, 90 seconds each,
+20/40/60 seconds apart. Anything else fails at once. A repository's accepted
+exceptions are its own `pnpm.auditConfig.ignoreGhsas`.
+
 ## Versions
 
 Releases are semver tags, published as immutable releases. Callers pin the
@@ -73,7 +96,7 @@ fix commit for that review's findings, and delta reviews of only what changed
 since. This repository's CI must be green:
 - actionlint, which also checks the action's inputs at a call site;
 - shellcheck at `-S warning`;
-- `tests/test-update-image-queue.sh`.
+- `tests/test-update-image-queue.sh` and `tests/test-lockfile-audit.sh`.
 
 A new release then reaches each caller as a sha bump, which runs that caller's
 CI.
@@ -86,8 +109,9 @@ Run the tests locally with git and mikefarah yq v4 on `PATH`:
 
 ```bash
 tests/test-update-image-queue.sh
+tests/test-lockfile-audit.sh
 ```
 
-They run `update.sh` exactly as `action.yml` does (`bash --noprofile --norc
--eo pipefail`), against a local bare remote and a stub `gh`. Nothing reaches
-GitHub.
+Each runs its action's script exactly as `action.yml` does. The queue test runs
+it against a local bare remote and a stub `gh`; the audit test against a stub
+`pnpm`, `timeout` and `sleep`. Nothing reaches GitHub or npm.
