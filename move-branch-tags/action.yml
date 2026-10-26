@@ -1,0 +1,42 @@
+name: Move branch tags
+description: >-
+  Point an image's branch tag, and latest for main, at a pushed digest, only
+  while the commit it was built from is still the branch's tip. Never fails
+  the step.
+inputs:
+  image:
+    description: The image repository the build pushed, such as ghcr.io/faultmaven/faultmaven. No tag or digest. Lowercased here, as metadata-action writes it.
+    required: true
+  digest:
+    description: The pushed image's digest (sha256:<64 hex>), such as build-push-action's digest output.
+    required: true
+  sha:
+    description: The full commit sha the image was built from.
+    required: true
+  ref:
+    description: The ref the tags follow. Only a branch moves anything, and latest moves only for refs/heads/main.
+    required: false
+    default: ${{ github.ref }}
+  github-token:
+    description: 'A token that reads this repository''s refs, for the tip lookup. The default needs the job''s `contents: read`.'
+    required: false
+    default: ${{ github.token }}
+outputs:
+  moved:
+    description: '`true` when the tags were moved to the digest, otherwise `false`.'
+    value: ${{ steps.move.outputs.moved }}
+runs:
+  using: composite
+  steps:
+    # Every value is bound through env:, never interpolated into the script.
+    - name: Move latest and the branch tag
+      id: move
+      shell: bash
+      env:
+        IMAGE: ${{ inputs.image }}
+        DIGEST: ${{ inputs.digest }}
+        RUN_SHA: ${{ inputs.sha }}
+        TAG_REF: ${{ inputs.ref }}
+        REPO: ${{ github.repository }}
+        GH_TOKEN: ${{ inputs.github-token }}
+      run: bash --noprofile --norc -eo pipefail "$GITHUB_ACTION_PATH/move.sh"

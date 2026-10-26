@@ -10,6 +10,7 @@ every fix had to be found and made once per copy.
 | [`lockfile-audit`](lockfile-audit/action.yml) | Audits `pnpm-lock.yaml` with `pnpm audit` at moderate and above, retrying only while npm's advisory endpoint is down |
 | [`setup-js`](setup-js/action.yml) | Sets up pnpm and Node at the versions the repository's `package.json` declares, then installs the lockfile frozen |
 | [`lint-workflows`](lint-workflows/action.yml) | Runs a checksum-verified actionlint, with shellcheck at `-S warning`, over the repository's workflows |
+| [`move-branch-tags`](move-branch-tags/action.yml) | Points an image's branch tag, and `latest` for main, at a pushed digest, only while the commit it was built from is still the branch's tip |
 
 ## `update-image-queue`
 
@@ -124,6 +125,56 @@ outputs only for an action pinned by a tag it has a record of; this
 repository's own CI calls each of its actions locally so their inputs are
 checked here.
 
+## `move-branch-tags`
+
+Call it as the publish job's last step, once the image is pushed. The build
+itself pushes only the commit's `sha-` tag, plus any semver tags: give
+metadata-action no `latest` or branch tag, and `flavor: latest=false`.
+
+```yaml
+- name: Move latest and the branch tag
+  if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+  uses: FaultMaven/ci-actions/move-branch-tags@<release commit sha> # vX.Y.Z
+  with:
+    image: ghcr.io/${{ github.repository_owner }}/<image name>
+    digest: ${{ steps.build.outputs.digest }}
+    sha: <the full commit the image was built from>
+```
+
+| Input | Required | Meaning |
+|---|---|---|
+| `image` | yes | The image repository the build pushed, with no tag or digest. It is lowercased, as metadata-action writes it, so `github.repository_owner` can be passed as it is |
+| `digest` | yes | The pushed image's digest (`sha256:<64 hex>`), such as build-push-action's `digest` output |
+| `sha` | yes | The full 40-character commit the image was built from |
+| `ref` | no | The ref the tags follow. The default is `github.ref`. Only a branch moves anything, and `latest` moves only for `refs/heads/main` |
+| `github-token` | no | A token that reads this repository's refs, for the tip lookup. The default is `github.token`, which needs the job's `contents: read` |
+
+It has one output, `moved`: `true` when the tags were moved, otherwise `false`.
+
+**The rule.** Immediately before moving anything, it reads the branch's tip
+through the API. Only when the tip is `sha` does it point `<image>:<branch tag>`
+at `<image>@<digest>`, and `<image>:latest` too on main. It uses `docker buildx
+imagetools create --prefer-index=false`, so a single-manifest image (one with no
+attestation) keeps its digest instead of being wrapped in a new index. The
+branch tag is named the way metadata-action's `type=ref,event=branch` names it.
+
+Read at job start instead, the answer goes stale while the image builds. A
+newer commit's publish can move the tags in that time, and the older build's
+push then moves them back (FaultMaven/faultmaven#2347). What is left is the few
+seconds the step takes: a registry offers no compare-and-set on a tag.
+
+**It never fails the step.** The tags are informational: deploys pin `sha-` tags
+through the image queue. A red publish would invite a re-run, which pushes the
+queued `sha-` tag again under a new digest. When nothing moves, an annotation
+says why:
+- `::notice::` when that is the rule working: the branch has moved on, or the
+  ref is not a branch;
+- `::warning::` when something failed: the tip lookup, or the registry;
+- `::error::` when an input is invalid.
+
+**The job must be logged in to the registry,** with `packages: write` for GHCR,
+and have docker buildx on `PATH`, as a job that has just pushed the image does.
+
 ## Versions
 
 Releases are semver tags, published as immutable releases. Callers pin the
@@ -139,8 +190,10 @@ since. This repository's CI must be green:
 - actionlint, which also checks the action's inputs at a call site;
 - shellcheck at `-S warning`;
 - `tests/test-update-image-queue.sh`, `tests/test-lockfile-audit.sh`,
-  `tests/test-setup-js.sh` and `tests/test-lint-workflows.sh`, plus a
-  `setup-js` job that sets up a fixture `package.json` for real.
+  `tests/test-setup-js.sh`, `tests/test-lint-workflows.sh` and
+  `tests/test-move-branch-tags.sh`;
+- a `setup-js` job that sets up a fixture `package.json` for real, and a
+  `move-branch-tags` job that moves tags in a local registry for real.
 
 A new release then reaches each caller as a sha bump, which runs that caller's
 CI.
@@ -156,6 +209,7 @@ tests/test-update-image-queue.sh
 tests/test-lockfile-audit.sh
 tests/test-setup-js.sh
 tests/test-lint-workflows.sh
+tests/test-move-branch-tags.sh
 ```
 
 Each runs its action's script exactly as `action.yml` does. The queue test runs
