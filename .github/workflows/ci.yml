@@ -22,9 +22,10 @@ jobs:
         uses: ./lint-workflows
 
       # actionlint reads workflows only, so the actions' scripts and the
-      # tests are linted here.
+      # tests are linted here. -x follows each script's source of
+      # lib/annotate.sh, so a script is checked with the helpers it calls.
       - name: shellcheck
-        run: shellcheck -S warning lib/*.sh update-image-queue/*.sh lockfile-audit/*.sh setup-js/*.sh lint-workflows/*.sh move-branch-tags/*.sh tests/*.sh
+        run: shellcheck -x -S warning lib/*.sh update-image-queue/*.sh lockfile-audit/*.sh setup-js/*.sh lint-workflows/*.sh move-branch-tags/*.sh tests/*.sh
 
   test:
     name: Test the actions

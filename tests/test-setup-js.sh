@@ -33,6 +33,10 @@ check false false 0 ""
 check false true 1 "::error::setup-js: install: true needs pnpm: true"
 check yes true 1 "::error::setup-js: pnpm must be 'true' or 'false', not 'yes'"
 check true "" 1 "::error::setup-js: install must be 'true' or 'false', not ''"
+# An input is escaped as GitHub decodes an annotation (#8): shown as written,
+# and no line of it can start a command.
+check 'x%0Ay' true 1 "::error::setup-js: pnpm must be 'true' or 'false', not 'x%250Ay'"
+check $'x\n::warning::y' true 1 "::error::setup-js: pnpm must be 'true' or 'false', not 'x%0A::warning::y'"
 
 echo "== action.yml"
 step() { yq ".runs.steps[] | select(.name == \"$1\") | $2" "$ACTION"; }

@@ -356,8 +356,8 @@ exit 0
     "$SEED" "$LOCK_C" > "$SB/remote.git/hooks/pre-receive"
 chmod +x "$SB/remote.git/hooks/pre-receive"
 runrow "$Y"; common "101" 0
-expect "101: git reports the lock race (remote rejected: incorrect old value, or cannot lock ref), the step recomputes, and Y lands on top of C with svc-b kept" \
-    'grep -qE "^ ! \[remote rejected\] image-queue -> image-queue \((incorrect old value provided|cannot lock ref|failed to update ref)" <<< "$OUT" && grep -qF "push rejected; recomputing against origin/image-queue (attempt 1/3)" <<< "$OUT" && ! grep -q "not as a race" <<< "$OUT" && '"$WROTE_Y"' && [[ "$(git -C "$SB/remote.git" rev-parse image-queue^)" == "$LOCK_C" && "$B_COMMIT" == "$X" ]]' "$(ctx)"
+expect "101: git reports the lock race (remote rejected: incorrect old value, or cannot lock ref; its output replayed under 'git push: '), the step recomputes, and Y lands on top of C with svc-b kept" \
+    'grep -qE "^git push:  ! \[remote rejected\] image-queue -> image-queue \((incorrect old value provided|cannot lock ref|failed to update ref)" <<< "$OUT" && grep -qF "push rejected; recomputing against origin/image-queue (attempt 1/3)" <<< "$OUT" && ! grep -q "not as a race" <<< "$OUT" && '"$WROTE_Y"' && [[ "$(git -C "$SB/remote.git" rev-parse image-queue^)" == "$LOCK_C" && "$B_COMMIT" == "$X" ]]' "$(ctx)"
 
 echo "== 103. tag: false, commit_sha: false: refused, never unseeded"
 mkrow 103 "" none 'image: ghcr.io/faultmaven/svc-a

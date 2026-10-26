@@ -174,6 +174,12 @@ outcome "coloured advisory+network, warn" 1 advisories 1 "" "### Dependency audi
 echo "== on-unreachable is neither fail nor warn"
 row badinput maybe "0|No known vulnerabilities found"
 outcome "bad input" 2 error 0 "" "### Dependency audit: not run"
+# The input is escaped as GitHub decodes an annotation (#8).
+row badescape $'a%0Ab\n::warning::c' "0|No known vulnerabilities found"
+# shellcheck disable=SC2034  # read inside expect's eval
+WANT_BAD="::error::on-unreachable must be 'fail' or 'warn', got 'a%250Ab%0A::warning::c'."
+expect "bad input with % and a line break: one annotation, escaped" \
+    '[[ "$(grep -c "^::" <<< "$OUT")" == 1 ]] && grep -qxF -- "$WANT_BAD" <<< "$OUT"' "$OUT"
 
 # ------------------------------------------------------------------ action.yml's wiring
 echo "== action.yml runs what this harness runs"
@@ -202,10 +208,12 @@ k=0; for e in "ECONNRESET  request to https://registry.npmjs.org/-/npm/v1/securi
   row "net$((++k))" fail "1| $e"; outcome "real transport error ${e%% *}" 1 unreachable 4 "20 40 60 " "### Dependency audit: DID NOT RUN"; done
 echo "== 124 from outside the limit: not an outage"
 TO_NOW=124 row to_now fail "0|x"; outcome "124 at once" 1 error 0 "" "### Dependency audit: failed"
-sed 's/^attempt_seconds=[0-9]*$/attempt_seconds=1/' "$SCRIPT" > "$WORK/fast.sh"
+# The copy sits in the repository's layout, so its ../lib/annotate.sh is found.
+mkdir -p "$WORK/lockfile-audit" "$WORK/lib" && cp "$REPO_ROOT/lib/annotate.sh" "$WORK/lib/"
+sed 's/^attempt_seconds=[0-9]*$/attempt_seconds=1/' "$SCRIPT" > "$WORK/lockfile-audit/fast.sh"
 # Fail, not hang: an unrewritten copy would wait out the real limit.
-grep -qx 'attempt_seconds=1' "$WORK/fast.sh" || { echo "the fast copy's attempt_seconds was not rewritten"; exit 1; }
-for c in 124 137; do RUN_SCRIPT="$WORK/fast.sh" TO_CODE=$c row "limit$c" fail "0|x"; outcome "limit ran out ($c)" 1 unreachable 0 "20 40 60 " "### Dependency audit: DID NOT RUN"; done
+grep -qx 'attempt_seconds=1' "$WORK/lockfile-audit/fast.sh" || { echo "the fast copy's attempt_seconds was not rewritten"; exit 1; }
+for c in 124 137; do RUN_SCRIPT="$WORK/lockfile-audit/fast.sh" TO_CODE=$c row "limit$c" fail "0|x"; outcome "limit ran out ($c)" 1 unreachable 0 "20 40 60 " "### Dependency audit: DID NOT RUN"; done
 echo ""
 echo "lockfile-audit: $PASS passed, $FAIL failed"
 [[ "$FAIL" -eq 0 ]]
