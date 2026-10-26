@@ -306,9 +306,16 @@ commit_sha: |
   ${X}
   ::warning::injected"
 runrow "$Y"; common "r3" 1
-refused "r3" "::error::the queued commit_sha is not a commit sha: available-images/staging/svc-a.yaml has tag 'sha-${X:0:7}' and commit_sha '${X} ::warning::injected'. The queue is left as it is. $GHCR_Y"
-expect "r3: no output line starts with the commit_sha's second line (it is flattened onto the error line)" \
+refused "r3" "::error::the queued commit_sha is not a commit sha: available-images/staging/svc-a.yaml has tag 'sha-${X:0:7}' and commit_sha '${X}%0A::warning::injected'. The queue is left as it is. $GHCR_Y"
+expect "r3: no output line starts with the commit_sha's second line (its line break is escaped as %0A, as GitHub decodes it)" \
     '! grep -q "^::warning::injected" <<< "$OUT" && ! grep -qx "$X" <<< "$OUT"' "$(ctx)"
+
+echo "== r3b. a % in a queued value: shown as written (%25), not decoded by GitHub (#8)"
+mkrow r3b "" none "image: ghcr.io/faultmaven/svc-a
+tag: \"sha-${X:0:7}\"
+commit_sha: \"abc%0A::warning::injected\""
+runrow "$Y"; common "r3b" 1
+refused "r3b" "::error::the queued commit_sha is not a commit sha: available-images/staging/svc-a.yaml has tag 'sha-${X:0:7}' and commit_sha 'abc%250A::warning::injected'. The queue is left as it is. $GHCR_Y"
 
 echo "== r4. a tag and commit_sha naming different commits: refused"
 mkrow r4 "" none "image: ghcr.io/faultmaven/svc-a

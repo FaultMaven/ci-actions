@@ -49,24 +49,21 @@ RACE_LOCK='^ ! \[remote rejected\] .*\((incorrect old value provided|cannot lock
 ERR="$(mktemp)"
 trap 'rm -f "$ERR"' EXIT
 
-# Every value printed into a :: command or the step summary goes
-# through flat(): CR, LF and tab become spaces, so no value can start
-# a line of its own.
+# escape(), annotate() and first_err() (the FIRST non-blank stderr line of
+# gh, git or yq, without gh's "gh: " prefix) are shared with
+# move-branch-tags: every value printed into a :: command is escaped as
+# GitHub decodes it (#8).
+# shellcheck source=../lib/annotate.sh
+source "$(dirname "${BASH_SOURCE[0]}")/../lib/annotate.sh"
+# A value printed into the step summary, which is markdown, not a workflow
+# command, goes through flat(): CR, LF and tab become spaces, so no value can
+# start a line of its own there.
 flat() {
   local s="$1"
   s="${s//$'\r'/ }"
   s="${s//$'\n'/ }"
   s="${s//$'\t'/ }"
   printf '%s' "$s"
-}
-annotate() {
-  printf '::%s::%s\n' "$1" "$(flat "$2")"
-}
-# The FIRST non-blank stderr line of gh, git or yq, without gh's
-# "gh: " prefix. gh's later lines are hints, not the error. Trailing
-# blanks are cut: git pads a "remote: " line with spaces.
-first_err() {
-  awk 'NF { sub(/^gh: /, ""); sub(/[ \t\r]+$/, ""); print; exit }' "$ERR"
 }
 # The line of a failed push that says why, trimmed: the first " ! "
 # status line, else the first "remote: " line with text after the

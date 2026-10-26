@@ -203,8 +203,8 @@ since. This repository's CI must be green:
 - actionlint, which also checks the action's inputs at a call site;
 - shellcheck at `-S warning`;
 - `tests/test-update-image-queue.sh`, `tests/test-lockfile-audit.sh`,
-  `tests/test-setup-js.sh`, `tests/test-lint-workflows.sh` and
-  `tests/test-move-branch-tags.sh`;
+  `tests/test-setup-js.sh`, `tests/test-lint-workflows.sh`,
+  `tests/test-move-branch-tags.sh` and `tests/test-lib-annotate.sh`;
 - a `setup-js` job that sets up a fixture `package.json` for real, and a
   `move-branch-tags` job that moves tags in a local registry for real.
 
@@ -223,7 +223,15 @@ tests/test-lockfile-audit.sh
 tests/test-setup-js.sh
 tests/test-lint-workflows.sh
 tests/test-move-branch-tags.sh
+tests/test-lib-annotate.sh
 ```
+
+`lib/annotate.sh` holds the annotation helpers `update-image-queue` and
+`move-branch-tags` share: each script sources it from its own directory's
+`../lib`, which a caller's `uses: FaultMaven/ci-actions/<action>@<sha>` always
+fetches, since that fetch is the whole repository. A value printed into a
+workflow command is escaped as GitHub decodes it (`%` as `%25`, CR as `%0D`, LF
+as `%0A`).
 
 Each runs its action's script exactly as `action.yml` does. The queue test runs
 it against a local bare remote and a stub `gh`; the audit test against a stub

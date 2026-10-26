@@ -43,19 +43,12 @@ reason=""
 invalid=false
 UNMOVED="latest and the branch tag were not moved"
 
-# A value printed into a :: command is escaped as GitHub decodes it: `%` as
-# %25, CR as %0D and LF as %0A. No value can start a line of its own, and none
-# is shown altered.
-escape() {
-  local s="$1"
-  s="${s//%/%25}"
-  s="${s//$'\r'/%0D}"
-  s="${s//$'\n'/%0A}"
-  printf '%s' "$s"
-}
-annotate() {
-  printf '::%s::%s\n' "$1" "$(escape "$2")"
-}
+# escape(), annotate() and first_err() are shared with update-image-queue
+# (#8): a value printed into a :: command is escaped as GitHub decodes it, `%`
+# as %25, CR as %0D and LF as %0A, so no value can start a line of its own,
+# and none is shown altered.
+# shellcheck source=../lib/annotate.sh
+source "$(dirname "${BASH_SOURCE[0]}")/../lib/annotate.sh"
 
 # Every exit ends here, the planned ones and any other. -e is off inside, so
 # a failure here (a closed stdout, an unwritable output file) cannot turn the
@@ -81,11 +74,6 @@ finish() {
 trap finish EXIT
 
 ERR="$(mktemp)"
-# The first non-blank stderr line of gh, without its "gh: " prefix: gh's later
-# lines are hints, not the error.
-first_err() {
-  awk 'NF { sub(/^gh: /, ""); sub(/[ \t\r]+$/, ""); print; exit }' "$ERR"
-}
 # The last non-blank stderr line of imagetools, which prints its progress
 # before its error.
 last_err() {
