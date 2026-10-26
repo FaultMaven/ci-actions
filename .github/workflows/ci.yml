@@ -24,7 +24,7 @@ jobs:
       # actionlint reads workflows only, so the actions' scripts and the
       # tests are linted here.
       - name: shellcheck
-        run: shellcheck -S warning update-image-queue/*.sh lockfile-audit/*.sh setup-js/*.sh lint-workflows/*.sh tests/*.sh
+        run: shellcheck -S warning update-image-queue/*.sh lockfile-audit/*.sh setup-js/*.sh lint-workflows/*.sh move-branch-tags/*.sh tests/*.sh
 
   test:
     name: Test the actions
@@ -48,6 +48,9 @@ jobs:
 
       - name: Test lint-workflows
         run: tests/test-lint-workflows.sh
+
+      - name: Test move-branch-tags
+        run: tests/test-move-branch-tags.sh
 
   # setup-js for real: a fixture package.json declares Node 24 and pnpm 9.15.9,
   # and each mode must set up exactly those, and install only when asked. The
@@ -98,6 +101,105 @@ jobs:
             [ ! -e node_modules ] || { echo "::error::an install ran with install: false"; exit 1; }
           fi
 
+  # move-branch-tags for real: a local registry, the two shapes a publish
+  # pushes (an index carrying a provenance attestation, and a single manifest
+  # without one), and this repository's main for the tip. The tags must end on
+  # exactly the digest the action was given, and a commit that is not the tip
+  # must leave them where they are.
+  move-branch-tags:
+    name: move-branch-tags (registry)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    services:
+      registry:
+        image: registry@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373 # registry:2
+        ports:
+          - 5000:5000
+    env:
+      IMAGE: localhost:5000/faultmaven/move-test
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # network=host, so the builder reaches the registry on localhost.
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          driver-opts: network=host
+
+      - name: Push an index and a single manifest
+        id: push
+        run: |
+          set -euo pipefail
+          ctx="$(mktemp -d)"
+          printf 'FROM scratch\nCOPY marker /marker\n' > "$ctx/Dockerfile"
+          for shape in index single; do
+            echo "$shape" > "$ctx/marker"
+            provenance=--provenance=mode=min
+            [ "$shape" = single ] && provenance=--provenance=false
+            docker buildx build "$provenance" --platform linux/amd64 --push \
+              -t "${IMAGE}:sha-${shape}" --metadata-file "$ctx/${shape}.json" "$ctx"
+            echo "${shape}=$(jq -r '."containerimage.digest"' "$ctx/${shape}.json")" >> "$GITHUB_OUTPUT"
+          done
+
+      # Read just before the calls that use it: a merge to main in between
+      # would make the "at the tip" cases report not-tip.
+      - name: Read main's tip
+        id: tip
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)"
+          echo "sha=${sha}" >> "$GITHUB_OUTPUT"
+
+      # The image named with the owner's capitals, as callers name it.
+      - name: The index, at the tip
+        id: index
+        uses: ./move-branch-tags
+        with:
+          image: localhost:5000/FaultMaven/move-test
+          digest: ${{ steps.push.outputs.index }}
+          sha: ${{ steps.tip.outputs.sha }}
+          ref: refs/heads/main
+
+      - name: latest and main are the index
+        env:
+          MOVED: ${{ steps.index.outputs.moved }}
+          REASON: ${{ steps.index.outputs.reason }}
+          WANT: ${{ steps.push.outputs.index }}
+        run: tests/check-registry-tags.sh true moved "$WANT"
+
+      - name: The single manifest, at the tip
+        id: single
+        uses: ./move-branch-tags
+        with:
+          image: ${{ env.IMAGE }}
+          digest: ${{ steps.push.outputs.single }}
+          sha: ${{ steps.tip.outputs.sha }}
+          ref: refs/heads/main
+
+      - name: latest and main are the single manifest, not wrapped in an index
+        env:
+          MOVED: ${{ steps.single.outputs.moved }}
+          REASON: ${{ steps.single.outputs.reason }}
+          WANT: ${{ steps.push.outputs.single }}
+        run: tests/check-registry-tags.sh true moved "$WANT"
+
+      - name: The index again, for a commit that is not the tip
+        id: stale
+        uses: ./move-branch-tags
+        with:
+          image: ${{ env.IMAGE }}
+          digest: ${{ steps.push.outputs.index }}
+          sha: '0000000000000000000000000000000000000000'
+          ref: refs/heads/main
+
+      - name: latest and main stayed on the single manifest
+        env:
+          MOVED: ${{ steps.stale.outputs.moved }}
+          REASON: ${{ steps.stale.outputs.reason }}
+          WANT: ${{ steps.push.outputs.single }}
+        run: tests/check-registry-tags.sh false not-tip "$WANT"
+
   # actionlint checks a local action's inputs at every call site, and a
   # remote one's not at all, so this job calls the action the way callers do.
   # It never runs.
@@ -119,3 +221,8 @@ jobs:
           pnpm: 'true'
           install: 'false'
       - uses: ./lint-workflows
+      - uses: ./move-branch-tags
+        with:
+          image: ghcr.io/faultmaven/faultmaven
+          digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+          sha: ${{ github.sha }}
