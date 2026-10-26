@@ -22,9 +22,10 @@ jobs:
         uses: ./lint-workflows
 
       # actionlint reads workflows only, so the actions' scripts and the
-      # tests are linted here.
+      # tests are linted here. -x follows each script's source of
+      # lib/annotate.sh, so a script is checked with the helpers it calls.
       - name: shellcheck
-        run: shellcheck -S warning update-image-queue/*.sh lockfile-audit/*.sh setup-js/*.sh lint-workflows/*.sh move-branch-tags/*.sh tests/*.sh
+        run: shellcheck -x -S warning lib/*.sh update-image-queue/*.sh lockfile-audit/*.sh setup-js/*.sh lint-workflows/*.sh move-branch-tags/*.sh tests/*.sh
 
   test:
     name: Test the actions
@@ -51,6 +52,9 @@ jobs:
 
       - name: Test move-branch-tags
         run: tests/test-move-branch-tags.sh
+
+      - name: Test lib/annotate.sh, the helpers both share
+        run: tests/test-lib-annotate.sh
 
   # setup-js for real: a fixture package.json declares Node 24 and pnpm 9.15.9,
   # and each mode must set up exactly those, and install only when asked. The

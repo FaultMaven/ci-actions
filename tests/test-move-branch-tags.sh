@@ -88,7 +88,7 @@ case "$mode" in
         exit 1 ;;
     unavailable)
         printf '%s' '{"message":"Server Error","status":"502"}'
-        echo "gh: Server Error (HTTP 502)" >&2
+        echo "gh: ${GH_FAIL_TEXT:-Server Error (HTTP 502)}" >&2
         exit 1 ;;
     transport)
         printf '%s\n' "error connecting to api.github.com" "check your internet connection or https://githubstatus.com" >&2
@@ -184,8 +184,8 @@ expect "m1: the lookup reads this repository's main" \
     '[[ "$(cat "$GH_LOG")" == "api repos/FaultMaven/svc/git/ref/heads/main --jq .object.sha" ]]' "$(cat "$GH_LOG")"
 expect "m1: imagetools points :main and :latest at the digest, keeping a single manifest's digest" \
     '[[ $DK == "$MOVE" ]]' "$DK"
-expect "m1: says what it moved, and passes imagetools' progress through" \
-    '[[ $OUT == "Moved $IMG:main and $IMG:latest to $DIGEST: $SHA is main'"'"'s tip." && $ERRS == *"#1 done"* ]]' "$(eval "$DETAIL")"
+expect "m1: says what it moved, and replays imagetools' output under 'imagetools: ', so no line of it can start a command" \
+    '[[ $OUT == "Moved $IMG:main and $IMG:latest to $DIGEST: $SHA is main'"'"'s tip." && $ERRS == *"imagetools: #1 done"* ]] && ! grep -q "^#1" <<< "$ERRS"' "$(eval "$DETAIL")"
 
 echo "== main moved on: nothing moves"
 tips "main $OTHER"
@@ -232,7 +232,7 @@ run refs/heads/main "$SHA" "$DIGEST" "$IMG" "$WANT_REPO" DOCKER_FAILS=9
 expect "m10: rc 0, moved=false, reason=push-failed, 3 lookups, 3 pushes, sleeps 2 and 4" \
     '[[ $RC == 0 && $MOVED == false && $REASON == push-failed && $GHN == 3 && $DKN == 3 && $SLEEPS == 2,4 ]]' "$(eval "$DETAIL")"
 expect "m10: a warning names imagetools' last line and that one tag may have moved; its output reaches the log" \
-    '[[ $ANN == "::warning::could not move the tags after 3 attempts: ERROR: failed to push ghcr.io/faultmaven/svc:main: unexpected status from PUT request: 502 Bad Gateway: imagetools pushes one tag at a time, so one may already name $DIGEST" && $ERRS == *"#1 copying"* ]]' "$(eval "$DETAIL")"
+    '[[ $ANN == "::warning::could not move the tags after 3 attempts: ERROR: failed to push ghcr.io/faultmaven/svc:main: unexpected status from PUT request: 502 Bad Gateway: imagetools pushes one tag at a time, so one may already name $DIGEST" && $ERRS == *"imagetools: #1 copying"* ]]' "$(eval "$DETAIL")"
 
 echo "== the image as a caller names it, with the owner's capitals"
 run refs/heads/main "$SHA" "$DIGEST" "ghcr.io/FaultMaven/svc" "$WANT_REPO"
@@ -248,6 +248,9 @@ expect "r1: one failed lookup: the second attempt moves the tags, after one slee
 run refs/heads/main "$SHA" "$DIGEST" "$IMG" "$WANT_REPO" DOCKER_FAILS=1
 expect "r2: one failed push: the tip is read again, and the second push moves the tags" \
     '[[ $RC == 0 && $MOVED == true && $REASON == moved && $GHN == 2 && $DKN == 2 && $SLEEPS == 2 && -z $ANN ]]' "$(eval "$DETAIL")"
+run refs/heads/main "$SHA" "$DIGEST" "$IMG" "$WANT_REPO" GH_FAILS=1 GH_FAIL_TEXT='HTTP 502: 100% of upstreams failed'
+expect "r1b: the retry's log line is plain text, so a % in gh's error is shown as written, not as %25" \
+    '[[ $MOVED == true && $ERRS == *"(attempt 1/3): HTTP 502: 100% of upstreams failed"* && $ERRS != *"%25"* ]]' "$(eval "$DETAIL")"
 printf '%s\n' "main $OTHER" > "$WORK/tips2"
 run refs/heads/main "$SHA" "$DIGEST" "$IMG" "$WANT_REPO" DOCKER_FAILS=1 TIPS2="$WORK/tips2"
 expect "r3: the push fails, and main moves on before the retry: nothing more is pushed" \

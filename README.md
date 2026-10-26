@@ -203,8 +203,8 @@ since. This repository's CI must be green:
 - actionlint, which also checks the action's inputs at a call site;
 - shellcheck at `-S warning`;
 - `tests/test-update-image-queue.sh`, `tests/test-lockfile-audit.sh`,
-  `tests/test-setup-js.sh`, `tests/test-lint-workflows.sh` and
-  `tests/test-move-branch-tags.sh`;
+  `tests/test-setup-js.sh`, `tests/test-lint-workflows.sh`,
+  `tests/test-move-branch-tags.sh` and `tests/test-lib-annotate.sh`;
 - a `setup-js` job that sets up a fixture `package.json` for real, and a
   `move-branch-tags` job that moves tags in a local registry for real.
 
@@ -223,8 +223,24 @@ tests/test-lockfile-audit.sh
 tests/test-setup-js.sh
 tests/test-lint-workflows.sh
 tests/test-move-branch-tags.sh
+tests/test-lib-annotate.sh
 ```
 
-Each runs its action's script exactly as `action.yml` does. The queue test runs
-it against a local bare remote and a stub `gh`; the audit test against a stub
-`pnpm`, `timeout` and `sleep`. Nothing reaches GitHub or npm.
+Each action's test runs its action's script exactly as `action.yml` does. The
+queue test runs it against a local bare remote and a stub `gh`; the audit test
+against a stub `pnpm`, `timeout` and `sleep`; the move-branch-tags test against
+a stub `gh` and `docker`. Nothing reaches GitHub, npm or a registry.
+`test-lib-annotate.sh` tests the shared library itself.
+
+### `lib/annotate.sh`
+
+The output helpers every action's script shares. Each script sources it from
+its own directory's `../lib`, which a caller's
+`uses: FaultMaven/ci-actions/<action>@<sha>` always fetches, since that fetch is
+the whole repository; a script that cannot load it still says so. The runner
+reads workflow commands from stdout and stderr alike, so:
+- a value printed into a workflow command is escaped as GitHub decodes it
+  (`%` as `%25`, CR as `%0D`, LF as `%0A`) by `annotate`;
+- a value printed anywhere else stays on its line through `flat`;
+- a tool's captured stderr is replayed with every line prefixed by the tool's
+  name (`log_tool_output`), so no line of it can start a command.

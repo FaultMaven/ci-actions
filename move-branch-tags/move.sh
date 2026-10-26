@@ -43,26 +43,16 @@ reason=""
 invalid=false
 UNMOVED="latest and the branch tag were not moved"
 
-# A value printed into a :: command is escaped as GitHub decodes it: `%` as
-# %25, CR as %0D and LF as %0A. No value can start a line of its own, and none
-# is shown altered.
-escape() {
-  local s="$1"
-  s="${s//%/%25}"
-  s="${s//$'\r'/%0D}"
-  s="${s//$'\n'/%0A}"
-  printf '%s' "$s"
-}
-annotate() {
-  printf '::%s::%s\n' "$1" "$(escape "$2")"
-}
-
 # Every exit ends here, the planned ones and any other. -e is off inside, so
 # a failure here (a closed stdout, an unwritable output file) cannot turn the
-# step red or skip the outputs.
+# step red or skip the outputs. It is installed before the library is loaded,
+# and does not need it.
 finish() {
   local rc=$?
   set +e
+  # Its own messages are fixed text and a number: nothing to escape, if the
+  # library never loaded.
+  declare -F annotate >/dev/null || annotate() { printf '::%s::%s\n' "$1" "$2"; }
   if [ "$invalid" = true ]; then
     rc=1
   elif [ "$rc" -ne 0 ]; then
@@ -80,17 +70,15 @@ finish() {
 }
 trap finish EXIT
 
+# Output helpers, shared with update-image-queue: ../lib/annotate.sh (#8).
+# shellcheck source=SCRIPTDIR/../lib/annotate.sh
+source "$(dirname "${BASH_SOURCE[0]}")/../lib/annotate.sh" || {
+  reason=stopped
+  printf '::warning::%s\n' "move-branch-tags cannot load ../lib/annotate.sh: ${UNMOVED}"
+  exit 0
+}
+
 ERR="$(mktemp)"
-# The first non-blank stderr line of gh, without its "gh: " prefix: gh's later
-# lines are hints, not the error.
-first_err() {
-  awk 'NF { sub(/^gh: /, ""); sub(/[ \t\r]+$/, ""); print; exit }' "$ERR"
-}
-# The last non-blank stderr line of imagetools, which prints its progress
-# before its error.
-last_err() {
-  awk 'NF { sub(/[ \t\r]+$/, ""); l = $0 } END { print l }' "$ERR"
-}
 refuse() {
   invalid=true
   reason=invalid
@@ -149,10 +137,10 @@ while :; do
   # gh's rc is read before its answer: a 404 prints its JSON body on stdout.
   TIP="$(timeout "$LOOKUP_TIMEOUT" gh api "repos/${REPO}/git/ref/heads/${BRANCH}" --jq .object.sha 2>"$ERR")" || rc=$?
   if [ "$rc" -ne 0 ]; then
-    why="$(first_err)"
+    why="$(first_err "$ERR")"
     [ "$rc" -eq 124 ] && why="timed out after ${LOOKUP_TIMEOUT}s"
     if [ "$attempt" -lt 3 ]; then
-      echo "Reading ${BRANCH}'s tip failed (attempt ${attempt}/3): $(escape "$why")" >&2
+      echo "Reading ${BRANCH}'s tip failed (attempt ${attempt}/3): $(flat "$why")" >&2
       sleep $((attempt * 2))
       attempt=$((attempt + 1))
       continue
@@ -171,16 +159,16 @@ while :; do
   # attestation) is wrapped in a new index under a new digest.
   rc=0
   timeout "$PUSH_TIMEOUT" docker buildx imagetools create --prefer-index=false "${args[@]}" "${IMAGE}@${DIGEST}" 2>"$ERR" || rc=$?
-  cat "$ERR" >&2 || true
+  log_tool_output imagetools "$ERR" || true
   if [ "$rc" -eq 0 ]; then
     moved=true
     reason=moved
     break
   fi
-  why="$(last_err)"
+  why="$(last_err "$ERR")"
   [ "$rc" -eq 124 ] && why="timed out after ${PUSH_TIMEOUT}s"
   if [ "$attempt" -lt 3 ]; then
-    echo "Moving the tags failed (attempt ${attempt}/3): $(escape "$why")" >&2
+    echo "Moving the tags failed (attempt ${attempt}/3): $(flat "$why")" >&2
     sleep $((attempt * 2))
     attempt=$((attempt + 1))
     continue

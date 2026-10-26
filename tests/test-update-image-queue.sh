@@ -306,9 +306,16 @@ commit_sha: |
   ${X}
   ::warning::injected"
 runrow "$Y"; common "r3" 1
-refused "r3" "::error::the queued commit_sha is not a commit sha: available-images/staging/svc-a.yaml has tag 'sha-${X:0:7}' and commit_sha '${X} ::warning::injected'. The queue is left as it is. $GHCR_Y"
-expect "r3: no output line starts with the commit_sha's second line (it is flattened onto the error line)" \
+refused "r3" "::error::the queued commit_sha is not a commit sha: available-images/staging/svc-a.yaml has tag 'sha-${X:0:7}' and commit_sha '${X}%0A::warning::injected'. The queue is left as it is. $GHCR_Y"
+expect "r3: no output line starts with the commit_sha's second line (its line break is escaped as %0A, as GitHub decodes it)" \
     '! grep -q "^::warning::injected" <<< "$OUT" && ! grep -qx "$X" <<< "$OUT"' "$(ctx)"
+
+echo "== r3b. a % in a queued value: shown as written (%25), not decoded by GitHub (#8)"
+mkrow r3b "" none "image: ghcr.io/faultmaven/svc-a
+tag: \"sha-${X:0:7}\"
+commit_sha: \"abc%0A::warning::injected\""
+runrow "$Y"; common "r3b" 1
+refused "r3b" "::error::the queued commit_sha is not a commit sha: available-images/staging/svc-a.yaml has tag 'sha-${X:0:7}' and commit_sha 'abc%250A::warning::injected'. The queue is left as it is. $GHCR_Y"
 
 echo "== r4. a tag and commit_sha naming different commits: refused"
 mkrow r4 "" none "image: ghcr.io/faultmaven/svc-a
@@ -349,8 +356,8 @@ exit 0
     "$SEED" "$LOCK_C" > "$SB/remote.git/hooks/pre-receive"
 chmod +x "$SB/remote.git/hooks/pre-receive"
 runrow "$Y"; common "101" 0
-expect "101: git reports the lock race (remote rejected: incorrect old value, or cannot lock ref), the step recomputes, and Y lands on top of C with svc-b kept" \
-    'grep -qE "^ ! \[remote rejected\] image-queue -> image-queue \((incorrect old value provided|cannot lock ref|failed to update ref)" <<< "$OUT" && grep -qF "push rejected; recomputing against origin/image-queue (attempt 1/3)" <<< "$OUT" && ! grep -q "not as a race" <<< "$OUT" && '"$WROTE_Y"' && [[ "$(git -C "$SB/remote.git" rev-parse image-queue^)" == "$LOCK_C" && "$B_COMMIT" == "$X" ]]' "$(ctx)"
+expect "101: git reports the lock race (remote rejected: incorrect old value, or cannot lock ref; its output replayed under 'git push: '), the step recomputes, and Y lands on top of C with svc-b kept" \
+    'grep -qE "^git push:  ! \[remote rejected\] image-queue -> image-queue \((incorrect old value provided|cannot lock ref|failed to update ref)" <<< "$OUT" && grep -qF "push rejected; recomputing against origin/image-queue (attempt 1/3)" <<< "$OUT" && ! grep -q "not as a race" <<< "$OUT" && '"$WROTE_Y"' && [[ "$(git -C "$SB/remote.git" rev-parse image-queue^)" == "$LOCK_C" && "$B_COMMIT" == "$X" ]]' "$(ctx)"
 
 echo "== 103. tag: false, commit_sha: false: refused, never unseeded"
 mkrow 103 "" none 'image: ghcr.io/faultmaven/svc-a

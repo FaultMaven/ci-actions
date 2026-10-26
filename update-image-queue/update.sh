@@ -49,35 +49,23 @@ RACE_LOCK='^ ! \[remote rejected\] .*\((incorrect old value provided|cannot lock
 ERR="$(mktemp)"
 trap 'rm -f "$ERR"' EXIT
 
-# Every value printed into a :: command or the step summary goes
-# through flat(): CR, LF and tab become spaces, so no value can start
-# a line of its own.
-flat() {
-  local s="$1"
-  s="${s//$'\r'/ }"
-  s="${s//$'\n'/ }"
-  s="${s//$'\t'/ }"
-  printf '%s' "$s"
-}
-annotate() {
-  printf '::%s::%s\n' "$1" "$(flat "$2")"
-}
-# The FIRST non-blank stderr line of gh, git or yq, without gh's
-# "gh: " prefix. gh's later lines are hints, not the error. Trailing
-# blanks are cut: git pads a "remote: " line with spaces.
-first_err() {
-  awk 'NF { sub(/^gh: /, ""); sub(/[ \t\r]+$/, ""); print; exit }' "$ERR"
+# Output helpers, shared with move-branch-tags: ../lib/annotate.sh (#8). A
+# script that cannot load them still says what the run leaves behind.
+# shellcheck source=SCRIPTDIR/../lib/annotate.sh
+source "$(dirname "${BASH_SOURCE[0]}")/../lib/annotate.sh" || {
+  echo "::error::update-image-queue cannot load ../lib/annotate.sh. ${GHCR}"
+  exit 1
 }
 # The line of a failed push that says why, trimmed: the first " ! "
 # status line, else the first "remote: " line with text after the
 # prefix, else the first "fatal: " or "error: " line, else the first
 # non-blank line.
-push_err() {
+push_err() { # file
   local line
-  line="$(awk '/^ ! / { print; exit }' "$ERR")"
-  [ -n "$line" ] || line="$(awk '/^remote: *[^ \t\r]/ { print; exit }' "$ERR")"
-  [ -n "$line" ] || line="$(awk '/^(fatal|error): / { print; exit }' "$ERR")"
-  [ -n "$line" ] || line="$(awk 'NF { print; exit }' "$ERR")"
+  line="$(awk '/^ ! / { print; exit }' "$1")"
+  [ -n "$line" ] || line="$(awk '/^remote: *[^ \t\r]/ { print; exit }' "$1")"
+  [ -n "$line" ] || line="$(awk '/^(fatal|error): / { print; exit }' "$1")"
+  [ -n "$line" ] || line="$(first_err "$1")"
   line="${line#"${line%%[![:space:]]*}"}"
   line="${line%"${line##*[![:space:]]}"}"
   printf '%s' "$line"
@@ -96,7 +84,7 @@ decide() {
   if ! sha="$(yq '.commit_sha | select(. != null)' "$QUEUE_FILE" 2>"$ERR")" ||
      ! tag="$(yq '.tag | select(. != null)' "$QUEUE_FILE" 2>"$ERR")"; then
     DECISION="retry"
-    REASON="could not read ${QUEUE_FILE}: $(first_err)"
+    REASON="could not read ${QUEUE_FILE}: $(first_err "$ERR")"
     return 0
   fi
   DETAIL="${QUEUE_FILE} has tag '${tag}' and commit_sha '${sha}'"
@@ -140,7 +128,7 @@ decide() {
     # integration" (observed in a private repository); a commit the
     # repository does not hold, or a repository the token cannot see, gets
     # 404. Any other failure, a 403 rate limit included, is retried.
-    err="$(first_err)"
+    err="$(first_err "$ERR")"
     case "$err" in
       *"Resource not accessible by integration"*"(HTTP 403)")
         DECISION="refuse"
@@ -211,7 +199,7 @@ for attempt in 1 2 3; do
       fi
       rc=0
       git push origin image-queue 2>"$ERR" || rc=$?
-      cat "$ERR" >&2
+      log_tool_output "git push" "$ERR"
       if [ "$rc" -eq 0 ]; then
         echo "✓ Updated image queue: ${TAG}"
         {
@@ -227,7 +215,7 @@ for attempt in 1 2 3; do
         exit 0
       fi
       if ! grep -Eq -e "$RACE" -e "$RACE_LOCK" "$ERR"; then
-        annotate error "the push to image-queue failed, not as a race: $(push_err). ${GHCR}"
+        annotate error "the push to image-queue failed, not as a race: $(push_err "$ERR"). ${GHCR}"
         exit 1
       fi
       REASON="the push to image-queue was rejected"

@@ -12,6 +12,14 @@
 # ON_UNREACHABLE (`fail` or `warn`) decides whether "unreachable" fails the step.
 set -uo pipefail
 
+# Output helpers: ../lib/annotate.sh (#8). The on-unreachable input is
+# printed into an annotation, so it is escaped there.
+# shellcheck source=SCRIPTDIR/../lib/annotate.sh
+source "$(dirname "${BASH_SOURCE[0]}")/../lib/annotate.sh" || {
+  echo "::error::lockfile-audit cannot load ../lib/annotate.sh"
+  exit 2
+}
+
 level=moderate
 audit=(pnpm audit "--audit-level=$level")
 attempts=4
@@ -41,7 +49,7 @@ finish() {
 case "${ON_UNREACHABLE:-}" in
   fail | warn) ;;
   *)
-    echo "::error::on-unreachable must be 'fail' or 'warn', got '${ON_UNREACHABLE:-}'."
+    annotate error "on-unreachable must be 'fail' or 'warn', got '${ON_UNREACHABLE:-}'."
     finish error 2 "### Dependency audit: not run" "" \
       "The lockfile-audit action needs \`on-unreachable: fail\` or \`warn\`."
     ;;
