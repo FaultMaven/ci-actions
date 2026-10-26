@@ -145,11 +145,14 @@ metadata-action no `latest` or branch tag, and `flavor: latest=false`.
 |---|---|---|
 | `image` | yes | The image repository the build pushed, with no tag or digest. It is lowercased, as metadata-action writes it, so `github.repository_owner` can be passed as it is |
 | `digest` | yes | The pushed image's digest (`sha256:<64 hex>`), such as build-push-action's `digest` output |
-| `sha` | yes | The full 40-character commit the image was built from |
+| `sha` | yes | The full 40-character commit the image was **built from**. Under `workflow_run` that is `github.event.workflow_run.head_sha`, never `github.sha`, which there names the default branch's tip when the run starts: passing it would move the tags to an image of another commit, the bug this action exists to stop |
 | `ref` | no | The ref the tags follow. The default is `github.ref`. Only a branch moves anything, and `latest` moves only for `refs/heads/main` |
 | `github-token` | no | A token that reads this repository's refs, for the tip lookup. The default is `github.token`, which needs the job's `contents: read` |
 
-It has one output, `moved`: `true` when the tags were moved, otherwise `false`.
+| Output | Meaning |
+|---|---|
+| `moved` | `true` when the tags now name `digest`, otherwise `false` |
+| `reason` | `moved`; `not-tip` (the branch has moved on); `not-branch` (the ref is a tag or a pull request); `branch-name` (characters outside `A-Z a-z 0-9 . _ / -`); `lookup-failed`; `push-failed`; `invalid`; or `stopped` (a command failed unexpectedly) |
 
 **The rule.** Immediately before moving anything, it reads the branch's tip
 through the API. Only when the tip is `sha` does it point `<image>:<branch tag>`
@@ -161,16 +164,26 @@ branch tag is named the way metadata-action's `type=ref,event=branch` names it.
 Read at job start instead, the answer goes stale while the image builds. A
 newer commit's publish can move the tags in that time, and the older build's
 push then moves them back (FaultMaven/faultmaven#2347). What is left is the few
-seconds the step takes: a registry offers no compare-and-set on a tag.
+seconds between the lookup and the push: a registry offers no compare-and-set
+on a tag.
 
-**It never fails the step.** The tags are informational: deploys pin `sha-` tags
-through the image queue. A red publish would invite a re-run, which pushes the
-queued `sha-` tag again under a new digest. When nothing moves, an annotation
-says why:
-- `::notice::` when that is the rule working: the branch has moved on, or the
-  ref is not a branch;
-- `::warning::` when something failed: the tip lookup, or the registry;
-- `::error::` when an input is invalid.
+The tags follow the tip, not the newest build. While the tip never publishes
+(its CI failed, was skipped or was cancelled), they stay on the last tip that
+did.
+
+**Moving never fails the step.** The tags are informational: deploys pin `sha-`
+tags through the image queue. A red publish would invite a re-run, which pushes
+the queued `sha-` tag again under a new digest.
+- A failed or hung lookup or push is retried: three attempts, each re-reading
+  the tip, each lookup bounded at 30 s and each push at 120 s.
+- After that the step passes, with `moved=false` and a `::warning::`. A failed
+  push may have moved one of the two tags already: imagetools pushes one tag at
+  a time.
+- When the rule decides not to move (`not-tip`, `not-branch`), a `::notice::`
+  says why.
+
+**An invalid input fails the step,** with an `::error::`. It is a wiring error
+that no re-run fixes, and passing it would leave the tags frozen without a sign.
 
 **The job must be logged in to the registry,** with `packages: write` for GHCR,
 and have docker buildx on `PATH`, as a job that has just pushed the image does.

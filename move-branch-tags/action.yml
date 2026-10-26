@@ -1,8 +1,8 @@
 name: Move branch tags
 description: >-
   Point an image's branch tag, and latest for main, at a pushed digest, only
-  while the commit it was built from is still the branch's tip. Never fails
-  the step.
+  while the commit it was built from is still the branch's tip. Moving never
+  fails the step; an invalid input does.
 inputs:
   image:
     description: The image repository the build pushed, such as ghcr.io/faultmaven/faultmaven. No tag or digest. Lowercased here, as metadata-action writes it.
@@ -25,6 +25,9 @@ outputs:
   moved:
     description: '`true` when the tags were moved to the digest, otherwise `false`.'
     value: ${{ steps.move.outputs.moved }}
+  reason:
+    description: 'Why: moved, not-tip, not-branch, branch-name, lookup-failed, push-failed, invalid or stopped.'
+    value: ${{ steps.move.outputs.reason }}
 runs:
   using: composite
   steps:

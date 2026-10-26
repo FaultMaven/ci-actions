@@ -140,11 +140,16 @@ jobs:
             echo "${shape}=$(jq -r '."containerimage.digest"' "$ctx/${shape}.json")" >> "$GITHUB_OUTPUT"
           done
 
+      # Read just before the calls that use it: a merge to main in between
+      # would make the "at the tip" cases report not-tip.
       - name: Read main's tip
         id: tip
         env:
           GH_TOKEN: ${{ github.token }}
-        run: echo "sha=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)" >> "$GITHUB_OUTPUT"
+        run: |
+          set -euo pipefail
+          sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)"
+          echo "sha=${sha}" >> "$GITHUB_OUTPUT"
 
       # The image named with the owner's capitals, as callers name it.
       - name: The index, at the tip
@@ -159,8 +164,9 @@ jobs:
       - name: latest and main are the index
         env:
           MOVED: ${{ steps.index.outputs.moved }}
+          REASON: ${{ steps.index.outputs.reason }}
           WANT: ${{ steps.push.outputs.index }}
-        run: tests/check-registry-tags.sh true "$WANT"
+        run: tests/check-registry-tags.sh true moved "$WANT"
 
       - name: The single manifest, at the tip
         id: single
@@ -174,8 +180,9 @@ jobs:
       - name: latest and main are the single manifest, not wrapped in an index
         env:
           MOVED: ${{ steps.single.outputs.moved }}
+          REASON: ${{ steps.single.outputs.reason }}
           WANT: ${{ steps.push.outputs.single }}
-        run: tests/check-registry-tags.sh true "$WANT"
+        run: tests/check-registry-tags.sh true moved "$WANT"
 
       - name: The index again, for a commit that is not the tip
         id: stale
@@ -189,8 +196,9 @@ jobs:
       - name: latest and main stayed on the single manifest
         env:
           MOVED: ${{ steps.stale.outputs.moved }}
+          REASON: ${{ steps.stale.outputs.reason }}
           WANT: ${{ steps.push.outputs.single }}
-        run: tests/check-registry-tags.sh false "$WANT"
+        run: tests/check-registry-tags.sh false not-tip "$WANT"
 
   # actionlint checks a local action's inputs at every call site, and a
   # remote one's not at all, so this job calls the action the way callers do.
