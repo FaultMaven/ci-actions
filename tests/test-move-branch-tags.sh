@@ -14,7 +14,10 @@
 #   |         | tip moving between attempts                | a new tip moves nothing                      |
 #   | t1-t2   | gh hangs, imagetools hangs                 | each attempt times out; rc 0                 |
 #   | v1-v9   | invalid sha, digest, image, repository     | ::error::, no lookup; invalid; rc 1          |
-#   | b1-b2   | branch names                               | odd ones refused; slashes become -           |
+#   | b1-b9   | branch names git allows: + @ , # % /,      | looked up percent-encoded; each run of other |
+#   |         | non-ASCII, 128 characters                  | characters becomes one -, as metadata-action |
+#   | b10-b16 | a name that makes no tag (a leading -, 129 | ::warning::, no lookup; branch-name          |
+#   |         | characters), or one git refuses (.., //)   |                                              |
 #   | s1-s5   | an injected tip, a %-escape, no            | one annotation line, escaped as GitHub       |
 #   |         | GITHUB_OUTPUT, a failing mktemp, a closed  | decodes it; rc 0 and both outputs written    |
 #   |         | stdout                                     | whatever fails                               |
@@ -290,14 +293,46 @@ expect "v9: an image with a line of its own is refused, and no line it carries s
 
 # ============================================================ branch names
 echo "== branch names"
-tips "feat#1 $SHA"
-run 'refs/heads/feat#1' "$SHA" "$DIGEST" "$IMG" "$WANT_REPO"
-expect "b1: a branch name outside A-Z a-z 0-9 . _ / - is not looked up; reason=branch-name" \
-    '[[ $RC == 0 && $MOVED == false && $REASON == branch-name && $GHN == 0 && $DKN == 0 && $ANN == "::warning::the branch name has characters outside A-Z a-z 0-9 . _ / -: latest and the branch tag were not moved" ]]' "$(eval "$DETAIL")"
-tips "release/2026.10_rc $SHA"
-run refs/heads/release/2026.10_rc "$SHA" "$DIGEST" "$IMG" "$WANT_REPO"
-expect "b2: slashes become -, as metadata-action names a branch tag; . and _ stay" \
-    '[[ $MOVED == true && $DK == "buildx imagetools create --prefer-index=false --tag $IMG:release-2026.10_rc $IMG@$DIGEST" ]]' "$(eval "$DETAIL")"
+# Each row: the branch, the path the lookup must send, and the tag it must
+# move. Every tag is metadata-action's own name for that branch: its
+# sanitizeTag, `/[^a-zA-Z0-9._-]+/g` → `-`, run over the same names.
+A128="$(printf 'a%.0s' {1..128})"
+named() { if [ "${#1}" -gt 40 ]; then printf '%s characters of a' "${#1}"; else printf '%s' "$1"; fi; }
+while IFS='|' read -r id branch path tag; do
+    tips "$path $SHA"
+    run "refs/heads/$branch" "$SHA" "$DIGEST" "$IMG" "$WANT_REPO"
+    expect "$id: $(named "$branch") is looked up as heads/$(named "$path") and moves :$(named "$tag")" \
+        '[[ $RC == 0 && $MOVED == true && $REASON == moved && -z $ANN && "$(cat "$GH_LOG")" == "api repos/FaultMaven/svc/git/ref/heads/$path --jq .object.sha" && $DK == "buildx imagetools create --prefer-index=false --tag $IMG:$tag $IMG@$DIGEST" ]]' "$(eval "$DETAIL")"
+done <<ROWS
+b1|fix+retry|fix%2Bretry|fix-retry
+b2|user@feature|user%40feature|user-feature
+b3|a,b|a%2Cb|a-b
+b4|feat#1|feat%231|feat-1
+b5|release/2026.10_rc|release/2026.10_rc|release-2026.10_rc
+b6|a+@,b/c|a%2B%40%2Cb/c|a-b-c
+b7|café/ü|caf%C3%A9/%C3%BC|caf-
+b8|100%|100%25|100-
+b9|$A128|$A128|$A128
+ROWS
+# The runner's locale is C.UTF-8, where é is one character, not two bytes.
+tips "caf%C3%A9/%C3%BC $SHA"
+run "refs/heads/café/ü" "$SHA" "$DIGEST" "$IMG" "$WANT_REPO" LC_ALL=C.UTF-8
+expect "b7: the same path and tag under LC_ALL=C.UTF-8, the runner's locale" \
+    '[[ $MOVED == true && "$(cat "$GH_LOG")" == "api repos/FaultMaven/svc/git/ref/heads/caf%C3%A9/%C3%BC --jq .object.sha" && $DK == "buildx imagetools create --prefer-index=false --tag $IMG:caf- $IMG@$DIGEST" ]]' "$(eval "$DETAIL")"
+DOTS="the branch name has an empty segment or one starting with a dot, which git does not allow: latest and the branch tag were not moved"
+while IFS='|' read -r id branch msg; do
+    run "refs/heads/$branch" "$SHA" "$DIGEST" "$IMG" "$WANT_REPO"
+    expect "$id: $(named "$branch") is refused, not looked up: ${msg%%: latest and*}" \
+        '[[ $RC == 0 && $MOVED == false && $REASON == branch-name && $GHN == 0 && $DKN == 0 && $ANN == "::warning::$msg" ]]' "$(eval "$DETAIL")"
+done <<ROWS
+b10|+fix|the branch name makes no tag: it starts with -: latest and the branch tag were not moved
+b11|${A128}b|the branch name makes no tag: it has 129 characters, and a tag has at most 128: latest and the branch tag were not moved
+b12|a/../../../../repos/other|$DOTS
+b13|../x|$DOTS
+b14|a/.hidden|$DOTS
+b15|a//b|$DOTS
+b16|a/|$DOTS
+ROWS
 
 # ============================================================ annotations, and the step passing whatever fails
 echo "== annotations, and failures around the rule"

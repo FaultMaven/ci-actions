@@ -24,7 +24,7 @@
 #   moved          the tags now name DIGEST
 #   not-tip        the branch has moved on (::notice::)
 #   not-branch     TAG_REF is not a branch (::notice::)
-#   branch-name    the branch name has characters the lookup does not send (::warning::)
+#   branch-name    the branch name makes no tag, or git would refuse it (::warning::)
 #   lookup-failed  the tip could not be read (::warning::)
 #   push-failed    imagetools failed; one of the tags may have moved (::warning::)
 #   invalid        an input is invalid (::error::, the step fails)
@@ -112,16 +112,50 @@ case "${TAG_REF:-}" in
     exit 0
     ;;
 esac
-# The branch name goes into an API path and a tag. Git allows characters that
-# neither takes, and no FaultMaven branch uses them.
-if ! [[ $BRANCH =~ ^[A-Za-z0-9._/-]+$ ]]; then
+# The branch name goes into an API path, so a segment git refuses (empty, or
+# starting with `.`, as `..` does) is refused here too: with one, the path
+# could leave heads/.
+if [[ /$BRANCH/ == *//* || /$BRANCH == */.* ]]; then
   reason=branch-name
-  annotate warning "the branch name has characters outside A-Z a-z 0-9 . _ / -: ${UNMOVED}"
+  annotate warning "the branch name has an empty segment or one starting with a dot, which git does not allow: ${UNMOVED}"
   exit 0
 fi
-# The branch tag, named as metadata-action's type=ref,event=branch names it.
-# Git refuses `//` in a branch name, so each `/` is one `-`.
-TAG="${BRANCH//\//-}"
+# Each segment percent-encoded, keeping only what RFC 3986 leaves as it is
+# (A-Z a-z 0-9 - . _ ~) and the slashes between segments, so any name git
+# allows is looked up as written: fix+retry is heads/fix%2Bretry. LC_ALL=C
+# makes each byte one character, so a non-ASCII letter goes as its UTF-8.
+encode_branch() {
+  local LC_ALL=C s="$1" out="" c i
+  for ((i = 0; i < ${#s}; i++)); do
+    c="${s:i:1}"
+    case "$c" in
+      [A-Za-z0-9._~/-]) out+="$c" ;;
+      *) printf -v c '%%%02X' "'$c"; out+="$c" ;;
+    esac
+  done
+  printf '%s' "$out"
+}
+BRANCH_PATH="$(encode_branch "$BRANCH")"
+# The branch tag, named as metadata-action's type=ref,event=branch names it:
+# each run of characters outside a-z A-Z 0-9 . _ - becomes one -, so feat/x
+# is :feat-x and fix+retry is :fix-retry. A non-ASCII letter becomes - too,
+# in any locale: bash's globasciiranges, on by default since bash 5.0, matches
+# a range such as a-z by code point.
+shopt -s extglob
+TAG="${BRANCH//+([^a-zA-Z0-9._-])/-}"
+# What metadata-action would hand on and the registry refuse: a tag starts
+# with a letter, a digit or _, and has at most 128 characters.
+why=""
+if [[ $TAG == [.-]* ]]; then
+  why="it starts with ${TAG:0:1}"
+elif [ "${#TAG}" -gt 128 ]; then
+  why="it has ${#TAG} characters, and a tag has at most 128"
+fi
+if [ -n "$why" ]; then
+  reason=branch-name
+  annotate warning "the branch name makes no tag: ${why}: ${UNMOVED}"
+  exit 0
+fi
 args=(--tag "${IMAGE}:${TAG}")
 LATEST=false
 if [ "$TAG_REF" = refs/heads/main ]; then
@@ -135,7 +169,7 @@ attempt=1
 while :; do
   rc=0
   # gh's rc is read before its answer: a 404 prints its JSON body on stdout.
-  TIP="$(timeout "$LOOKUP_TIMEOUT" gh api "repos/${REPO}/git/ref/heads/${BRANCH}" --jq .object.sha 2>"$ERR")" || rc=$?
+  TIP="$(timeout "$LOOKUP_TIMEOUT" gh api "repos/${REPO}/git/ref/heads/${BRANCH_PATH}" --jq .object.sha 2>"$ERR")" || rc=$?
   if [ "$rc" -ne 0 ]; then
     why="$(first_err "$ERR")"
     [ "$rc" -eq 124 ] && why="timed out after ${LOOKUP_TIMEOUT}s"

@@ -152,14 +152,17 @@ metadata-action no `latest` or branch tag, and `flavor: latest=false`.
 | Output | Meaning |
 |---|---|
 | `moved` | `true` when the tags now name `digest`, otherwise `false` |
-| `reason` | `moved`; `not-tip` (the branch has moved on); `not-branch` (the ref is a tag or a pull request); `branch-name` (characters outside `A-Z a-z 0-9 . _ / -`); `lookup-failed`; `push-failed`; `invalid`; or `stopped` (a command failed unexpectedly) |
+| `reason` | `moved`; `not-tip` (the branch has moved on); `not-branch` (the ref is a tag or a pull request); `branch-name` (the name makes no valid tag, such as one starting with `-` or longer than 128 characters, or git would refuse it); `lookup-failed`; `push-failed`; `invalid`; or `stopped` (a command failed unexpectedly) |
 
 **The rule.** Immediately before moving anything, it reads the branch's tip
 through the API. Only when the tip is `sha` does it point `<image>:<branch tag>`
 at `<image>@<digest>`, and `<image>:latest` too on main. It uses `docker buildx
 imagetools create --prefer-index=false`, so a single-manifest image (one with no
 attestation) keeps its digest instead of being wrapped in a new index. The
-branch tag is named the way metadata-action's `type=ref,event=branch` names it.
+branch tag is named the way metadata-action's `type=ref,event=branch` names it:
+each run of characters outside `a-z A-Z 0-9 . _ -` becomes one `-`, so `feat/x`
+is `:feat-x` and `fix+retry` is `:fix-retry`. The lookup percent-encodes the
+name, so any branch name git allows is read as written.
 
 Read at job start instead, the answer goes stale while the image builds. A
 newer commit's publish can move the tags in that time, and the older build's
