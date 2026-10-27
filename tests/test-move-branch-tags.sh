@@ -14,10 +14,14 @@
 #   |         | tip moving between attempts                | a new tip moves nothing                      |
 #   | t1-t2   | gh hangs, imagetools hangs                 | each attempt times out; rc 0                 |
 #   | v1-v9   | invalid sha, digest, image, repository     | ::error::, no lookup; invalid; rc 1          |
-#   | b1-b9   | branch names git allows: + @ , # % /,      | looked up percent-encoded; each run of other |
-#   |         | non-ASCII, 128 characters                  | characters becomes one -, as metadata-action |
-#   | b10-b16 | a name that makes no tag (a leading -, 129 | ::warning::, no lookup; branch-name          |
+#   | b1-b11  | branch names git allows: + @ , # % /,      | looked up percent-encoded; each run of other |
+#   |         | non-ASCII, 128 characters, near-reserved   | characters becomes one -, as metadata-action |
+#   | b12-b18 | a name that makes no tag (a leading -, 129 | ::warning::, no lookup; branch-name          |
 #   |         | characters), or one git refuses (.., //)   |                                              |
+#   | b19-b23 | a name that makes latest, a sha- tag or a  | ::warning::, no lookup; branch-name          |
+#   |         | version                                    |                                              |
+#   | c1-c4   | a control character (LF, CR, tab, DEL)     | ::warning::, no lookup; one :: line in all   |
+#   |         |                                            | of stdout and stderr                         |
 #   | s1-s5   | an injected tip, a %-escape, no            | one annotation line, escaped as GitHub       |
 #   |         | GITHUB_OUTPUT, a failing mktemp, a closed  | decodes it; rc 0 and both outputs written    |
 #   |         | stdout                                     | whatever fails                               |
@@ -159,7 +163,7 @@ run() {
     env -i PATH="$BIN:/usr/bin:/bin" HOME="$WORK" GH_LOG="$GH_LOG" DOCKER_LOG="$DOCKER_LOG" SLEEP_LOG="$SLEEP_LOG" \
         TIPS="$TIPS" WANT_REPO="$WANT_REPO" GITHUB_OUTPUT="$WORK/out" \
         IMAGE="$image" DIGEST="$digest" RUN_SHA="$sha" TAG_REF="$ref" REPO="$repo" GH_TOKEN=stub-token-not-a-credential \
-        "$@" bash --noprofile --norc -eo pipefail "$SCRIPT" > "${STDOUT_TO:-$WORK/stdout}" 2> "$WORK/stderr"
+        "$@" bash --noprofile --norc -eo pipefail "$SCRIPT" < /dev/null > "${STDOUT_TO:-$WORK/stdout}" 2> "$WORK/stderr"
     RC=$?
     # shellcheck disable=SC2034  # each is read inside expect's eval
     {
@@ -313,26 +317,43 @@ b6|a+@,b/c|a%2B%40%2Cb/c|a-b-c
 b7|café/ü|caf%C3%A9/%C3%BC|caf-
 b8|100%|100%25|100-
 b9|$A128|$A128|$A128
+b10|sha-fix|sha-fix|sha-fix
+b11|latest-ui|latest-ui|latest-ui
 ROWS
 # The runner's locale is C.UTF-8, where é is one character, not two bytes.
 tips "caf%C3%A9/%C3%BC $SHA"
 run "refs/heads/café/ü" "$SHA" "$DIGEST" "$IMG" "$WANT_REPO" LC_ALL=C.UTF-8
 expect "b7: the same path and tag under LC_ALL=C.UTF-8, the runner's locale" \
     '[[ $MOVED == true && "$(cat "$GH_LOG")" == "api repos/FaultMaven/svc/git/ref/heads/caf%C3%A9/%C3%BC --jq .object.sha" && $DK == "buildx imagetools create --prefer-index=false --tag $IMG:caf- $IMG@$DIGEST" ]]' "$(eval "$DETAIL")"
-DOTS="the branch name has an empty segment or one starting with a dot, which git does not allow: latest and the branch tag were not moved"
+GIT="the branch name has a control character, an empty segment or one starting with a dot, which git does not allow: latest and the branch tag were not moved"
+OWN="one of the image's own tags (latest, a sha- tag, or a version): latest and the branch tag were not moved"
 while IFS='|' read -r id branch msg; do
     run "refs/heads/$branch" "$SHA" "$DIGEST" "$IMG" "$WANT_REPO"
     expect "$id: $(named "$branch") is refused, not looked up: ${msg%%: latest and*}" \
         '[[ $RC == 0 && $MOVED == false && $REASON == branch-name && $GHN == 0 && $DKN == 0 && $ANN == "::warning::$msg" ]]' "$(eval "$DETAIL")"
 done <<ROWS
-b10|+fix|the branch name makes no tag: it starts with -: latest and the branch tag were not moved
-b11|${A128}b|the branch name makes no tag: it has 129 characters, and a tag has at most 128: latest and the branch tag were not moved
-b12|a/../../../../repos/other|$DOTS
-b13|../x|$DOTS
-b14|a/.hidden|$DOTS
-b15|a//b|$DOTS
-b16|a/|$DOTS
+b12|+fix|the branch name makes no tag: it starts with -: latest and the branch tag were not moved
+b13|${A128}b|the branch name makes no tag: it has 129 characters, and a tag has at most 128: latest and the branch tag were not moved
+b14|a/../../../../repos/other|$GIT
+b15|../x|$GIT
+b16|a/.hidden|$GIT
+b17|a//b|$GIT
+b18|a/|$GIT
+b19|latest|the branch name makes no tag: it would be :latest, $OWN
+b20|sha-1234567|the branch name makes no tag: it would be :sha-1234567, $OWN
+b21|sha+1234567|the branch name makes no tag: it would be :sha-1234567, $OWN
+b22|1.2.3|the branch name makes no tag: it would be :1.2.3, $OWN
+b23|v1.2|the branch name makes no tag: it would be :v1.2, $OWN
 ROWS
+# A control character, which no heredoc row can carry. A line break in the
+# name must not start a line of its own anywhere: stdout and stderr together
+# hold exactly the one warning.
+for row in c1:$'a\n::error title=x::pwned' c2:$'a\r::error::pwned' c3:$'a\tb' c4:$'a\x7fb'; do
+    tips "a $SHA"
+    run "refs/heads/${row#*:}" "$SHA" "$DIGEST" "$IMG" "$WANT_REPO" GH_MODE=notfound
+    expect "${row%%:*}: a control character is refused before the lookup, and no line but the warning starts with ::" \
+        '[[ $RC == 0 && $MOVED == false && $REASON == branch-name && $GHN == 0 && $DKN == 0 && $ANN == "::warning::$GIT" && $(printf "%s\n%s\n" "$OUT" "$ERRS" | tr "\r" "\n" | grep -c "^[[:space:]]*::") == 1 ]]' "$(eval "$DETAIL")"
+done
 
 # ============================================================ annotations, and the step passing whatever fails
 echo "== annotations, and failures around the rule"
@@ -346,7 +367,7 @@ tips "main $SHA"
 : > "$GH_LOG"; : > "$DOCKER_LOG"
 env -i PATH="$BIN:/usr/bin:/bin" HOME="$WORK" GH_LOG="$GH_LOG" DOCKER_LOG="$DOCKER_LOG" SLEEP_LOG="$SLEEP_LOG" TIPS="$TIPS" WANT_REPO="$WANT_REPO" \
     IMAGE="$IMG" DIGEST="$DIGEST" RUN_SHA="$SHA" TAG_REF=refs/heads/main REPO="$WANT_REPO" GH_TOKEN=stub \
-    bash --noprofile --norc -eo pipefail "$SCRIPT" > "$WORK/stdout" 2> "$WORK/stderr"
+    bash --noprofile --norc -eo pipefail "$SCRIPT" < /dev/null > "$WORK/stdout" 2> "$WORK/stderr"
 RC=$?
 expect "s3: without GITHUB_OUTPUT it still moves the tags, and passes" \
     '[[ $RC == 0 && "$(wc -l < "$DOCKER_LOG" | tr -d " ")" == 1 ]]' "rc=$RC $(cat "$WORK/stdout" "$WORK/stderr")"

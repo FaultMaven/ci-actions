@@ -56,6 +56,26 @@ jobs:
       - name: Test lib/annotate.sh, the helpers both share
         run: tests/test-lib-annotate.sh
 
+  # move-branch-tags on musl libc and BusyBox, as a job in an Alpine container
+  # runs it. Bash's reading of a byte >= 0x80 differs there (musl's C locale
+  # makes it U+DF80-U+DFFF), and BusyBox's timeout exits 143, not 124. The
+  # pinned yq is a static binary, so the runner's copy is mounted in.
+  test-musl:
+    name: move-branch-tags (musl)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install yq
+        run: bash --noprofile --norc -eo pipefail update-image-queue/install-yq.sh
+
+      - name: Test move-branch-tags on Alpine
+        run: |
+          docker run --rm -v "$PWD:/src:ro" -v /usr/local/bin/yq:/usr/local/bin/yq:ro \
+            alpine@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc \
+            sh -euc 'apk add --no-cache bash >/dev/null && cp -r /src /w && cd /w && bash tests/test-move-branch-tags.sh'
+
   # setup-js for real: a fixture package.json declares Node 24 and pnpm 9.15.9,
   # and each mode must set up exactly those, and install only when asked. The
   # fixture's one dependency is a link: to a local directory, so an install
