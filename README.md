@@ -152,14 +152,21 @@ metadata-action no `latest` or branch tag, and `flavor: latest=false`.
 | Output | Meaning |
 |---|---|
 | `moved` | `true` when the tags now name `digest`, otherwise `false` |
-| `reason` | `moved`; `not-tip` (the branch has moved on); `not-branch` (the ref is a tag or a pull request); `branch-name` (characters outside `A-Z a-z 0-9 . _ / -`); `lookup-failed`; `push-failed`; `invalid`; or `stopped` (a command failed unexpectedly) |
+| `reason` | `moved`; `not-tip` (the branch has moved on); `not-branch` (the ref is a tag or a pull request); `branch-name` (the name makes no valid tag, such as one starting with `-` or longer than 128 characters; makes one of the image's own tags, `latest`, `sha-<commit>` or a version such as `1.2`; or git would refuse it); `lookup-failed`; `push-failed`; `invalid`; or `stopped` (a command failed unexpectedly) |
 
 **The rule.** Immediately before moving anything, it reads the branch's tip
 through the API. Only when the tip is `sha` does it point `<image>:<branch tag>`
 at `<image>@<digest>`, and `<image>:latest` too on main. It uses `docker buildx
 imagetools create --prefer-index=false`, so a single-manifest image (one with no
 attestation) keeps its digest instead of being wrapped in a new index. The
-branch tag is named the way metadata-action's `type=ref,event=branch` names it.
+branch tag is named the way metadata-action's `type=ref,event=branch` names it:
+each run of characters outside `a-z A-Z 0-9 . _ -` becomes one `-`, so `feat/x`
+is `:feat-x` and `fix+retry` is `:fix-retry`. Branches whose names differ only
+in those characters (`fix+retry`, `fix/retry`, `fix-retry`) share one tag, as
+they did under metadata-action, so it names whichever of them published last at
+its tip. The lookup percent-encodes the name, so any branch name git allows is
+read as written. A branch name that would make `latest`, a `sha-<commit>` tag or
+a version tag moves nothing: those tags are the image's own.
 
 Read at job start instead, the answer goes stale while the image builds. A
 newer commit's publish can move the tags in that time, and the older build's

@@ -24,7 +24,8 @@
 #   moved          the tags now name DIGEST
 #   not-tip        the branch has moved on (::notice::)
 #   not-branch     TAG_REF is not a branch (::notice::)
-#   branch-name    the branch name has characters the lookup does not send (::warning::)
+#   branch-name    the branch name makes no tag, would make one of the image's
+#                  own tags, or git would refuse it (::warning::)
 #   lookup-failed  the tip could not be read (::warning::)
 #   push-failed    imagetools failed; one of the tags may have moved (::warning::)
 #   invalid        an input is invalid (::error::, the step fails)
@@ -112,16 +113,69 @@ case "${TAG_REF:-}" in
     exit 0
     ;;
 esac
-# The branch name goes into an API path and a tag. Git allows characters that
-# neither takes, and no FaultMaven branch uses them.
-if ! [[ $BRANCH =~ ^[A-Za-z0-9._/-]+$ ]]; then
+# A name git refuses is refused here too, before anything prints it: a
+# control character (a line break would let a log line start a workflow
+# command), or a segment that is empty or starts with `.`, as `..` does (the
+# lookup path could leave heads/). The control characters are found in the
+# bytes, below.
+GIT_REFUSES="the branch name has a control character, an empty segment or one starting with a dot, which git does not allow: ${UNMOVED}"
+if [[ /$BRANCH/ == *//* || /$BRANCH == */.* ]]; then
   reason=branch-name
-  annotate warning "the branch name has characters outside A-Z a-z 0-9 . _ / -: ${UNMOVED}"
+  annotate warning "$GIT_REFUSES"
   exit 0
 fi
-# The branch tag, named as metadata-action's type=ref,event=branch names it.
-# Git refuses `//` in a branch name, so each `/` is one `-`.
-TAG="${BRANCH//\//-}"
+# The name's bytes, two hex digits each. They come from od because bash's own
+# reading of a byte >= 0x80 depends on the locale and the libc: under musl's C
+# locale it is U+DF80-U+DFFF, so é became %DFC3%DFA9.
+BYTES="$(printf '%s' "$BRANCH" | od -An -v -tx1)"
+# One pass makes both names:
+# - BRANCH_PATH, for the lookup: every byte percent-encoded but A-Z a-z 0-9
+#   - . _ (RFC 3986's unreserved characters, less the ~ git refuses) and the
+#   slashes between segments, so any name git allows is read as written:
+#   fix+retry is heads/fix%2Bretry, é is %C3%A9.
+# - TAG, named as metadata-action's type=ref,event=branch names it: each run
+#   of bytes outside a-z A-Z 0-9 . _ - becomes one -, so feat/x is :feat-x,
+#   fix+retry is :fix-retry and café/ü is :caf-.
+BRANCH_PATH="" TAG="" gap=false control=false
+for b in $BYTES; do
+  printf -v c "\\x${b}"
+  case "$b" in
+    3[0-9] | 4[1-9a-f] | 5[0-9a] | 6[1-9a-f] | 7[0-9a] | 2d | 2e | 5f)
+      BRANCH_PATH+="$c"
+      TAG+="$c"
+      gap=false
+      continue
+      ;;
+    2f) BRANCH_PATH+="$c" ;;
+    0? | 1? | 7f) control=true ;;
+    *) BRANCH_PATH+="%${b^^}" ;;
+  esac
+  [ "$gap" = true ] || TAG+=-
+  gap=true
+done
+if [ "$control" = true ]; then
+  reason=branch-name
+  annotate warning "$GIT_REFUSES"
+  exit 0
+fi
+# What metadata-action would hand on and the registry refuse (a tag starts
+# with a letter, a digit or _, and has at most 128 characters), and a tag the
+# image already uses for something else: latest, the sha- tag every publish
+# pushes and the image queue deploys, and a release's version tags. A branch
+# named for one would move it.
+why=""
+if [[ $TAG == [.-]* ]]; then
+  why="it starts with ${TAG:0:1}"
+elif [ "${#TAG}" -gt 128 ]; then
+  why="it has ${#TAG} characters, and a tag has at most 128"
+elif [[ $TAG == latest || $TAG =~ ^sha-[0-9a-f]{7,40}$ || $TAG =~ ^v?[0-9]+\.[0-9]+ ]]; then
+  why="it would be :${TAG}, one of the image's own tags (latest, a sha- tag, or a version)"
+fi
+if [ -n "$why" ]; then
+  reason=branch-name
+  annotate warning "the branch name makes no tag: ${why}: ${UNMOVED}"
+  exit 0
+fi
 args=(--tag "${IMAGE}:${TAG}")
 LATEST=false
 if [ "$TAG_REF" = refs/heads/main ]; then
@@ -135,12 +189,13 @@ attempt=1
 while :; do
   rc=0
   # gh's rc is read before its answer: a 404 prints its JSON body on stdout.
-  TIP="$(timeout "$LOOKUP_TIMEOUT" gh api "repos/${REPO}/git/ref/heads/${BRANCH}" --jq .object.sha 2>"$ERR")" || rc=$?
+  TIP="$(timeout "$LOOKUP_TIMEOUT" gh api "repos/${REPO}/git/ref/heads/${BRANCH_PATH}" --jq .object.sha 2>"$ERR")" || rc=$?
   if [ "$rc" -ne 0 ]; then
     why="$(first_err "$ERR")"
-    [ "$rc" -eq 124 ] && why="timed out after ${LOOKUP_TIMEOUT}s"
+    # 124 is coreutils' timeout; BusyBox's exits 143, as the SIGTERM it sends.
+    case "$rc" in 124 | 143) why="timed out after ${LOOKUP_TIMEOUT}s" ;; esac
     if [ "$attempt" -lt 3 ]; then
-      echo "Reading ${BRANCH}'s tip failed (attempt ${attempt}/3): $(flat "$why")" >&2
+      echo "Reading $(flat "$BRANCH")'s tip failed (attempt ${attempt}/3): $(flat "$why")" >&2
       sleep $((attempt * 2))
       attempt=$((attempt + 1))
       continue
@@ -166,7 +221,7 @@ while :; do
     break
   fi
   why="$(last_err "$ERR")"
-  [ "$rc" -eq 124 ] && why="timed out after ${PUSH_TIMEOUT}s"
+  case "$rc" in 124 | 143) why="timed out after ${PUSH_TIMEOUT}s" ;; esac
   if [ "$attempt" -lt 3 ]; then
     echo "Moving the tags failed (attempt ${attempt}/3): $(flat "$why")" >&2
     sleep $((attempt * 2))
@@ -179,7 +234,7 @@ while :; do
 done
 
 if [ "$LATEST" = true ]; then
-  echo "Moved ${IMAGE}:${TAG} and ${IMAGE}:latest to ${DIGEST}: ${RUN_SHA} is ${BRANCH}'s tip."
+  echo "Moved ${IMAGE}:${TAG} and ${IMAGE}:latest to ${DIGEST}: ${RUN_SHA} is $(flat "$BRANCH")'s tip."
 else
-  echo "Moved ${IMAGE}:${TAG} to ${DIGEST}: ${RUN_SHA} is ${BRANCH}'s tip."
+  echo "Moved ${IMAGE}:${TAG} to ${DIGEST}: ${RUN_SHA} is $(flat "$BRANCH")'s tip."
 fi
